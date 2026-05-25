@@ -1,14 +1,14 @@
 import { ApiError } from './ApiError'
-import { getAccessToken, refreshAccessToken } from '@/services/authService'
+import { getDeviceToken } from '@/services/deviceTokenService'
 import { API_URL, BASE_URL } from '@/api/constants'
 
 function buildHeaders(
-  accessToken: string | null,
+  deviceToken: string | null,
   options?: RequestInit
 ): RequestInit['headers'] {
   return {
     'Content-Type': 'application/json',
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...(deviceToken ? { 'X-Device-Token': deviceToken } : {}),
     Referer: BASE_URL,
     ...options?.headers,
   }
@@ -42,31 +42,16 @@ export const fetchApi = async <T = Record<string, unknown>>(
     url = `/${url}`
   }
 
-  const token = await getAccessToken()
-  const firstResponse = await fetch(`${API_URL}${url}`, {
-    ...options,
-    headers: buildHeaders(token, options),
-  })
-  const first = await parseResponse<T>(firstResponse)
+  const token = await getDeviceToken()
+  const { response, result } = await parseResponse<T>(
+    await fetch(`${API_URL}${url}`, {
+      ...options,
+      headers: buildHeaders(token, options),
+    })
+  )
 
-  if (first.response.status === 401) {
-    const refreshedToken = await refreshAccessToken()
-    if (refreshedToken) {
-      const retryResponse = await fetch(`${API_URL}${url}`, {
-        ...options,
-        headers: buildHeaders(refreshedToken, options),
-      })
-      const retry = await parseResponse<T>(retryResponse)
-
-      if (!retry.response.ok) {
-        throw new ApiError(retry.response.status, retry.result)
-      }
-      return retry.result
-    }
+  if (!response.ok) {
+    throw new ApiError(response.status, result)
   }
-
-  if (!first.response.ok) {
-    throw new ApiError(first.response.status, first.result)
-  }
-  return first.result
+  return result
 }

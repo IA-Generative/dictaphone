@@ -1,9 +1,27 @@
 {
   "login": {
     "loginCta": "Me connecter",
-    "subtitle": "Enregistrez vos réunions en personne et accédez à vos transcriptions.",
+    "scanQrCta": "Scanner un QR code",
+    "enterCodeCta": "Saisir un code",
+    "subtitle": "Scannez le QR code généré dans mes-réunions pour autoriser cet appareil.",
     "logout": "Me déconnecter",
     "skip": "Passer"
+  },
+  "qrScan": {
+    "hint": "Pointez l'appareil vers le QR code affiché dans mes-réunions.",
+    "permissionDenied": "Accès caméra refusé. Ouvrez les Réglages pour l'autoriser.",
+    "openSettings": "Ouvrir les Réglages",
+    "enrolling": "Inscription de l'appareil en cours…",
+    "retry": "Réessayer",
+    "noCamera": "Caméra indisponible sur cet appareil.",
+    "invalidCode": "QR code non reconnu."
+  },
+  "codeEntry": {
+    "title": "Saisir un code",
+    "subtitle": "Entrez le code à 6 caractères affiché à côté du QR code.",
+    "placeholder": "ABC123",
+    "submit": "Valider",
+    "invalidCode": "Code invalide ou expiré."
   },
   "home": {
     "record": "Démarrer",

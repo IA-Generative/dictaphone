@@ -1,20 +1,20 @@
 import { Pressable, StyleSheet } from 'react-native'
 import React, { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { login } from '@/services/authService'
+import { useNavigation } from '@react-navigation/native'
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import { AppText } from './AppText'
 import { colors } from '@/components/colors'
+import type { RootStackParamList } from '@/navigation/types'
 
 export function LoginButton() {
   const { t } = useTranslation()
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>()
 
-  const handleLogin = useCallback(async () => {
-    try {
-      await login()
-    } catch (error) {
-      console.error('Login failed:', error)
-    }
-  }, [])
+  const handleLogin = useCallback(() => {
+    navigation.navigate('Login')
+  }, [navigation])
 
   return (
     <Pressable

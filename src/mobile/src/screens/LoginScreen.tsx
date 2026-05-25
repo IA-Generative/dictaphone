@@ -1,34 +1,31 @@
-// src/screens/LoginScreen.tsx
 import React, { useEffect } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 import { useTranslation } from 'react-i18next'
 // @ts-expect-error  Logo SVG
 import LogoWithName from '../assets/logo-single-line.svg'
-import { LoginButton } from '@/components/LoginButton'
 import { useInsets } from '@/utils/useInsets'
 import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
-import { useUserStore } from '@/services/userStore'
+import { useDeviceStore } from '@/features/device/store'
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
+import type { RootStackParamList } from '@/navigation/types'
 
 type LoginScreenProps = {
-  navigation: {
-    replace: (routeName: string) => void
-  }
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Login'>
 }
 
 export default function LoginScreen({ navigation }: LoginScreenProps) {
   const { t } = useTranslation()
-
-  const { user } = useUserStore()
   const insets = useInsets()
+  const enrollment = useDeviceStore((s) => s.enrollment)
 
   useEffect(() => {
-    if (user) {
+    if (enrollment) {
       navigation.replace('Main')
     }
-  }, [user, navigation])
+  }, [enrollment, navigation])
 
-  if (user) {
+  if (enrollment) {
     return null
   }
 
@@ -42,19 +39,25 @@ export default function LoginScreen({ navigation }: LoginScreenProps) {
           </AppText>
         </View>
         <View style={styles.loginContainer}>
-          <LoginButton />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t('login.skip')}
             style={({ pressed }) => [
-              styles.skipButton,
-              pressed && styles.skipButtonPressed,
+              styles.primaryButton,
+              pressed && styles.primaryButtonPressed,
             ]}
-            onPress={() => navigation.replace('Main')}
+            onPress={() => navigation.navigate('QrScan')}
           >
-            <AppText variant="body" size="md" align="center">
-              {t('login.skip')}
-            </AppText>
+            <AppText variant="button">{t('login.scanQrCta')}</AppText>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              pressed && styles.secondaryButtonPressed,
+            ]}
+            onPress={() => navigation.navigate('CodeEntry')}
+          >
+            <AppText variant="button">{t('login.enterCodeCta')}</AppText>
           </Pressable>
         </View>
       </View>
@@ -89,14 +92,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  skipButton: {
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: colors.backgroundSubtle,
-    lineHeight: 16,
+  primaryButton: {
+    width: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 4,
+    height: 40,
+    display: 'flex',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  skipButtonPressed: {
-    backgroundColor: colors.backgroundSubtlePressed,
+  primaryButtonPressed: {
+    backgroundColor: colors.primaryPressed,
+  },
+  secondaryButton: {
+    width: '100%',
+    backgroundColor: colors.secondary,
+    borderRadius: 4,
+    height: 40,
+    display: 'flex',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  secondaryButtonPressed: {
+    backgroundColor: colors.secondaryPressed,
   },
 })

@@ -1,31 +1,20 @@
 {
-  "fill" : {
-    "solid" : "display-p3:0.98474,0.97861,1.00000,1.00000"
-  },
   "groups" : [
     {
       "layers" : [
         {
           "hidden" : false,
           "image-name" : "Logomark Transcripts.png",
-          "name" : "Logomark Transcripts",
+          "name" : "MIrAI Logomark",
           "position" : {
-            "scale" : 1.25,
+            "scale" : 1.0,
             "translation-in-points" : [
               0,
               0
             ]
           }
         }
-      ],
-      "shadow" : {
-        "kind" : "neutral",
-        "opacity" : 0.5
-      },
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
-      }
+      ]
     }
   ],
   "supported-platforms" : {

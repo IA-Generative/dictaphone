@@ -1,9 +1,27 @@
 {
   "login": {
     "loginCta": "Login",
-    "subtitle": "Record your in-person meetings and access your transcripts.",
+    "scanQrCta": "Scan a QR code",
+    "enterCodeCta": "Enter a code",
+    "subtitle": "Scan the QR code generated in mes-réunions to authorize this device.",
     "logout": "Logout",
     "skip": "Skip for now"
+  },
+  "qrScan": {
+    "hint": "Point the device at the QR code shown in mes-réunions.",
+    "permissionDenied": "Camera access denied. Open Settings to allow it.",
+    "openSettings": "Open Settings",
+    "enrolling": "Enrolling device…",
+    "retry": "Try again",
+    "noCamera": "Camera unavailable on this device.",
+    "invalidCode": "Unrecognized QR code."
+  },
+  "codeEntry": {
+    "title": "Enter a code",
+    "subtitle": "Enter the 6-character code shown next to the QR code.",
+    "placeholder": "ABC123",
+    "submit": "Validate",
+    "invalidCode": "Invalid or expired code."
   },
   "home": {
     "record": "Record",

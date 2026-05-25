@@ -5,14 +5,12 @@ import { type ApiUser } from './ApiUser'
 import { useCallback, useEffect, useMemo } from 'react'
 import { updateUserPreferences } from '@/features/auth/api/updateUserPreferences'
 import { queryClient } from '@/api/queryClient'
-import { clearAuthState } from '@/services/authService'
+import { clearDeviceCredentials } from '@/services/deviceTokenService'
+import { useDeviceStore } from '@/features/device/store'
 import {
   startAnalyticsSession,
   terminateAnalyticsSession,
 } from '@/features/analytics/hooks/useAnalytics'
-import { colors } from '@/components/colors'
-import { InAppBrowser } from 'react-native-inappbrowser-reborn'
-import { API_URL, BASE_URL } from '@/api/constants'
 import { useUserStore } from '@/services/userStore'
 
 type TUserInfo = {
@@ -77,44 +75,10 @@ export const useUser = () => {
 
   const logout = useCallback(async () => {
     terminateAnalyticsSession()
-
     try {
-      await InAppBrowser.openAuth(
-        API_URL + '/logout/?source=mobile',
-        BASE_URL,
-        {
-          // iOS Properties
-          dismissButtonStyle: 'cancel',
-          preferredBarTintColor: colors.secondary,
-          preferredControlTintColor: 'white',
-          readerMode: false,
-          animated: true,
-          modalPresentationStyle: 'fullScreen',
-          modalTransitionStyle: 'coverVertical',
-          modalEnabled: true,
-          enableBarCollapsing: false,
-          // Android Properties
-          showTitle: false,
-          toolbarColor: colors.secondary,
-          secondaryToolbarColor: 'black',
-          navigationBarColor: 'black',
-          navigationBarDividerColor: 'white',
-          enableUrlBarHiding: true,
-          enableDefaultShare: false,
-          forceCloseOnRedirection: true,
-          // Specify full animation resource identifier(package:anim/name)
-          // or only resource name(in case of animation bundled with app).
-          animations: {
-            startEnter: 'slide_in_right',
-            startExit: 'slide_out_left',
-            endEnter: 'slide_in_left',
-            endExit: 'slide_out_right',
-          },
-          headers: {},
-        }
-      )
+      await clearDeviceCredentials()
     } finally {
-      await clearAuthState()
+      useDeviceStore.getState().clearEnrollment()
       clearCachedUser()
       queryClient.resetQueries()
     }
