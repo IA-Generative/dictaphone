@@ -18,10 +18,14 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { AppInitialization } from '@/components/AppInitialization'
 import { logPosthogScreenChange } from '@/features/analytics/hooks/useAnalytics'
 import { UpdateModal } from '@/features/config/UpdateModal'
+import { useSharedAudioListener } from '@/features/share/useSharedAudioListener'
+import { useFileStatusSocket } from '@/features/pipeline/useFileStatusSocket'
 
 const RootStack = createNativeStackNavigator<RootStackParamList>()
 
 function App() {
+  useSharedAudioListener()
+  useFileStatusSocket()
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>

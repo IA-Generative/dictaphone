@@ -121,9 +121,17 @@ export default function RecordingsScreen() {
   const handleRefresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: [keys.files] })
 
+    // Retry any failed upload — and unstick anything left in 'uploading'
+    // state (e.g. an iOS app kill mid-upload leaves the flag dangling).
     for (const recording of recordings) {
-      if (recording.uploadingStatus === 'failed') {
-        updateRecording(recording.id, { uploadingStatus: 'to_upload' })
+      if (
+        recording.uploadingStatus === 'failed' ||
+        recording.uploadingStatus === 'uploading'
+      ) {
+        updateRecording(recording.id, {
+          uploadingStatus: 'to_upload',
+          uploadProgress: undefined,
+        })
       }
     }
   }, [queryClient, recordings, updateRecording])
@@ -241,16 +249,8 @@ export default function RecordingsScreen() {
             filesQ.fetchNextPage()
           }
         }}
-        refreshing={
-          isOnline && (isLoggedIn || allRecordings.length > 0)
-            ? filesQ.isRefetching
-            : undefined
-        }
-        onRefresh={
-          isOnline && (isLoggedIn || allRecordings.length > 0)
-            ? handleRefresh
-            : undefined
-        }
+        refreshing={filesQ.isRefetching}
+        onRefresh={handleRefresh}
         ListFooterComponent={
           isOnline && !filesQ.isPending && allRecordings.length > 0 ? (
             filesQ.hasNextPage ? (

@@ -1,5 +1,5 @@
 export type RootStackParamList = {
-  Login: undefined
+  Login: { force?: boolean } | undefined
   QrScan: undefined
   CodeEntry: undefined
   Main: undefined

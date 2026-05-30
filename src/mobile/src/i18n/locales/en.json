@@ -23,6 +23,34 @@
     "submit": "Validate",
     "invalidCode": "Invalid or expired code."
   },
+  "deviceBanner": {
+    "label": "Enrollment code",
+    "change": "Change"
+  },
+  "mainMenu": {
+    "importAudio": "Import an audio file"
+  },
+  "pipeline": {
+    "status": {
+      "pending": "Pending…",
+      "scanning": "Antivirus scan…",
+      "scan_clean": "Clean, transcoding…",
+      "scan_infected": "⚠️ Virus detected",
+      "quarantined": "⚠️ Quarantined",
+      "transcoding": "Transcoding…",
+      "transcoded": "Processing done",
+      "ready_for_transfer": "Ready for transfer",
+      "transferring": "Transferring…",
+      "transferred": "✅ Available in your account",
+      "error": "❌ Processing error",
+      "kevent_queued": "Queued for transcription…",
+      "kevent_transcribing": "Transcribing…",
+      "kevent_processing": "Processing…",
+      "kevent_completed": "✅ Transcription complete",
+      "kevent_partially_completed": "Partial transcription",
+      "kevent_failed": "❌ Transcription failed"
+    }
+  },
   "home": {
     "record": "Record",
     "stop": "Stop",
@@ -155,7 +183,8 @@
     "now": "Update now"
   },
   "common": {
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "cancel": "Cancel"
   },
   "shared": {
     "utils": {

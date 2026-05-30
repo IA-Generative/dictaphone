@@ -6,6 +6,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
 import { useTranslation } from 'react-i18next'
 import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
@@ -42,6 +43,7 @@ export default function CodeEntryScreen() {
   const { t } = useTranslation()
   const insets = useInsets()
   const resetNavigation = useResetNavigationHistory()
+  const navigation = useNavigation()
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -111,6 +113,21 @@ export default function CodeEntryScreen() {
             <AppText variant="button">{t('codeEntry.submit')}</AppText>
           )}
         </Pressable>
+        {navigation.canGoBack() && (
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.cancelButton,
+              pressed && styles.cancelButtonPressed,
+            ]}
+            onPress={() => navigation.goBack()}
+            disabled={loading}
+          >
+            <AppText variant="body" align="center" color={colors.textSecondary}>
+              {t('common.cancel')}
+            </AppText>
+          </Pressable>
+        )}
       </View>
     </View>
   )
@@ -144,5 +161,12 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.5,
+  },
+  cancelButton: {
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  cancelButtonPressed: {
+    opacity: 0.6,
   },
 })

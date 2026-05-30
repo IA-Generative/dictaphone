@@ -40,6 +40,7 @@ import { colors } from '@/components/colors'
 import { useTranslation } from 'react-i18next'
 import { RetryTranscriptModal } from '@/components/RetryTranscriptModal'
 import { TRANSCRIPTION_LANGUAGES } from '@/features/ai-jobs/constants'
+import { pipelineStatusLabel } from '@/features/pipeline/statusLabels'
 
 const OPEN_STATE_THRESHOLD = 60
 const DELETE_ACTION_WIDTH = 80
@@ -74,6 +75,11 @@ function StatusIndicator({ item, uploadBlockReason }: StatusIndicatorProps) {
       return <PauseIcon />
     }
     if (item.uploadingStatus === 'uploading') {
+      return <ActivityIndicator size="small" />
+    }
+    if (item.uploadingStatus === 'uploaded') {
+      // Server-side pipeline running — spin until the WebSocket reports
+      // a terminal status (transferred / kevent_completed).
       return <ActivityIndicator size="small" />
     }
     return <WarningIcon />
@@ -119,7 +125,14 @@ function formatRecordMeta(
       return `${durationLabel} • ${t('recordings.meta.loginToSync')}`
     }
     if (recording.uploadingStatus === 'uploading') {
-      return `${durationLabel} • ${t('recordings.meta.uploading')}`
+      const pct =
+        recording.uploadProgress?.percentage != null
+          ? ` ${Math.round(recording.uploadProgress.percentage)}%`
+          : ''
+      return `${durationLabel} • ${t('recordings.meta.uploading')}${pct}`
+    }
+    if (recording.uploadingStatus === 'uploaded' && recording.serverStatus) {
+      return `${durationLabel} • ${pipelineStatusLabel(recording.serverStatus, t)}`
     }
     if (
       recording.uploadingStatus === 'failed' ||

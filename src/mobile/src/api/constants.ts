@@ -1,6 +1,5 @@
-// MIrAI mes-réunions DMZ upload portal host.
-// TODO: confirm the public DMZ hostname with the mirai-mesreunions ops.
-// In the meantime, override at runtime if needed by editing this constant.
-export const BASE_URL = 'https://upload.mirai.numerique.gouv.fr'
+// MIrAI mes-réunions DMZ upload portal host (mobile-upload-pwa service).
+// Admin/portal lives on mesreunions.numerique-interieur.com.
+export const BASE_URL = 'https://depot.numerique-interieur.com'
 export const API_URL = BASE_URL
 export const MOCK_DATA = false

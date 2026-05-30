@@ -25,6 +25,7 @@ import uuid from 'react-native-uuid'
 import { useLocalRecordings } from '@/features/recordings/hooks/useLocalRecordings'
 import { AppText } from './AppText'
 import { colors } from './colors'
+import { VuMeter } from './VuMeter'
 import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory'
 // @ts-expect-error SVG
 import PauseIcon from '@/assets/icons/pause-recording.svg'
@@ -63,6 +64,7 @@ export const AudioRecorder = () => {
   )
   const [isRecording, setIsRecording] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
+  const [audioLevel, setAudioLevel] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [shouldResetNavigation, setShouldResetNavigation] = useState(false)
@@ -203,6 +205,8 @@ export const AudioRecorder = () => {
         clearInterval(recordingDurationInterval.current)
         recordingDurationInterval.current = null
       }
+      setAudioLevel(0)
+      audioRecorder.clearOnAudioReady()
       return
     }
 
@@ -217,10 +221,41 @@ export const AudioRecorder = () => {
       }, 200)
     }
 
+    // Subscribe to raw audio buffers and compute RMS for the VU meter.
+    // Match the recorder's default 2 channels — mismatching the count is the
+    // most common reason the callback never fires.
+    let lastLogTs = 0
+    const result = audioRecorder.onAudioReady(
+      { sampleRate: 48000, bufferLength: 2048, channelCount: 2 },
+      (event) => {
+        try {
+          const samples = event.buffer.getChannelData(0)
+          let sumSquares = 0
+          for (let i = 0; i < samples.length; i++) {
+            const s = samples[i]
+            sumSquares += s * s
+          }
+          const rms = Math.sqrt(sumSquares / samples.length)
+          // Throttle log to every ~500 ms so we don't flood Metro.
+          const now = Date.now()
+          if (now - lastLogTs > 500) {
+            console.log(`[VU] rms=${rms.toFixed(4)} samples=${samples.length}`)
+            lastLogTs = now
+          }
+          // Boost: a normal speaking voice sits around RMS 0.05-0.15
+          setAudioLevel(Math.min(1, rms * 4))
+        } catch (e) {
+          console.warn('VU meter sample read failed', e)
+        }
+      }
+    )
+    console.log('[VU] onAudioReady register result:', result)
+
     return () => {
       if (recordingDurationInterval.current) {
         clearInterval(recordingDurationInterval.current)
       }
+      audioRecorder.clearOnAudioReady()
     }
   }, [isPaused, isRecording])
 
@@ -499,6 +534,10 @@ export const AudioRecorder = () => {
         )}
       </View>
 
+      <View style={styles.meterSection}>
+        <VuMeter level={isPaused ? 0 : audioLevel} />
+      </View>
+
       <View style={styles.controlsRow}>
         <Pressable
           style={({ pressed }) => [
@@ -545,6 +584,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 36,
     paddingBottom: 20,
+  },
+  meterSection: {
+    width: '70%',
   },
   statusSection: {
     alignItems: 'center',

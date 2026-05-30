@@ -7,27 +7,28 @@ import { useInsets } from '@/utils/useInsets'
 import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
 import { useDeviceStore } from '@/features/device/store'
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
+import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import type { RootStackParamList } from '@/navigation/types'
 
-type LoginScreenProps = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Login'>
-}
+type LoginScreenProps = NativeStackScreenProps<RootStackParamList, 'Login'>
 
-export default function LoginScreen({ navigation }: LoginScreenProps) {
+export default function LoginScreen({ navigation, route }: LoginScreenProps) {
   const { t } = useTranslation()
   const insets = useInsets()
   const enrollment = useDeviceStore((s) => s.enrollment)
+  const force = route.params?.force === true
 
   useEffect(() => {
-    if (enrollment) {
+    if (enrollment && !force) {
       navigation.replace('Main')
     }
-  }, [enrollment, navigation])
+  }, [enrollment, force, navigation])
 
-  if (enrollment) {
+  if (enrollment && !force) {
     return null
   }
+
+  const canCancel = force && navigation.canGoBack()
 
   return (
     <View style={[insets]}>
@@ -59,6 +60,20 @@ export default function LoginScreen({ navigation }: LoginScreenProps) {
           >
             <AppText variant="button">{t('login.enterCodeCta')}</AppText>
           </Pressable>
+          {canCancel && (
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                styles.cancelButton,
+                pressed && styles.cancelButtonPressed,
+              ]}
+              onPress={() => navigation.goBack()}
+            >
+              <AppText variant="body" color={colors.textSecondary}>
+                {t('common.cancel')}
+              </AppText>
+            </Pressable>
+          )}
         </View>
       </View>
     </View>
@@ -117,5 +132,13 @@ const styles = StyleSheet.create({
   },
   secondaryButtonPressed: {
     backgroundColor: colors.secondaryPressed,
+  },
+  cancelButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 4,
+  },
+  cancelButtonPressed: {
+    opacity: 0.6,
   },
 })

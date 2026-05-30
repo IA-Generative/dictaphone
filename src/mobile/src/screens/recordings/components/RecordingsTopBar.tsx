@@ -4,6 +4,7 @@ import { Lucide } from '@react-native-vector-icons/lucide'
 import type { TFunction } from 'i18next'
 import MainMenu from '@/components/MainMenu'
 import { LoginButton } from '@/components/LoginButton'
+import { DeviceBanner } from '@/components/DeviceBanner'
 import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
 // @ts-expect-error Icon
@@ -29,9 +30,21 @@ export function RecordingsTopBar({
   return (
     <View style={styles.topBar}>
       <View style={styles.topBarHeader}>
-        <LogoWithName style={styles.title} />
+        <View style={styles.titleBlock}>
+          <LogoWithName style={styles.title} />
+          <View style={styles.miraiBadge}>
+            <AppText
+              variant="bodyBold"
+              size="xs"
+              color={colors.primary}
+            >
+              by MIrAI
+            </AppText>
+          </View>
+        </View>
         <MainMenu />
       </View>
+      {isLoggedIn && <DeviceBanner />}
       {isOnline && !isLoading && !isLoggedIn && (
         <View style={styles.loginCard}>
           <AppText variant="body" align="center" color={colors.neutralTertiary}>
@@ -95,6 +108,17 @@ const styles = StyleSheet.create({
   },
   title: {
     marginBottom: 2,
+  },
+  titleBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  miraiBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: colors.secondary,
   },
   loginCard: {
     display: 'flex',

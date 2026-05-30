@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
+import { useNavigation } from '@react-navigation/native'
 import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory'
 import { extractQrToken } from '@/features/device/extractQrToken'
 import { enrollDevice } from '@/features/device/api/enroll'
@@ -36,6 +37,7 @@ export default function QrScanScreen() {
   const [errorMessage, setErrorMessage] = useState<string>('')
   const handledRef = useRef(false)
   const resetNavigation = useResetNavigationHistory()
+  const navigation = useNavigation()
 
   useEffect(() => {
     Camera.requestCameraPermission().then((perm) => {
@@ -154,11 +156,25 @@ export default function QrScanScreen() {
         isActive
         codeScanner={codeScanner}
       />
-      <View style={[styles.overlay, insets]} pointerEvents="none">
-        <View style={styles.viewfinder} />
+      <View style={[styles.overlay, insets]} pointerEvents="box-none">
+        <View style={styles.viewfinder} pointerEvents="none" />
         <AppText variant="body" size="md" align="center" style={styles.hint}>
           {t('qrScan.hint')}
         </AppText>
+        {navigation.canGoBack() && (
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.cancelButton,
+              pressed && styles.cancelButtonPressed,
+            ]}
+            onPress={() => navigation.goBack()}
+          >
+            <AppText variant="button" color="white">
+              {t('common.cancel')}
+            </AppText>
+          </Pressable>
+        )}
       </View>
     </View>
   )
@@ -186,6 +202,17 @@ const styles = StyleSheet.create({
   hint: {
     color: 'white',
     paddingHorizontal: 24,
+  },
+  cancelButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 4,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
+    borderColor: 'white',
+  },
+  cancelButtonPressed: {
+    opacity: 0.7,
   },
   center: {
     flex: 1,
