@@ -5,15 +5,19 @@ import { useDeviceStore } from './store'
 // On enrollment (or app foreground), fetch /api/device/session/<qr_token>
 // to learn the simple_code and retention horizon. Updates the persisted
 // store so the UI can display the code without re-scanning.
+// Keyed on the qr_token only: the effect writes the enrollment back, so
+// depending on the whole object re-fetched the session in a tight loop
+// whenever the server's expires_at moved.
 export function useDeviceSessionSync() {
-  const enrollment = useDeviceStore((s) => s.enrollment)
+  const qrToken = useDeviceStore((s) => s.enrollment?.qrToken)
 
   useEffect(() => {
-    if (!enrollment) return
+    if (!qrToken) return
     let cancelled = false
-    fetchDeviceSession(enrollment.qrToken)
+    fetchDeviceSession(qrToken)
       .then((info) => {
-        if (cancelled) return
+        const enrollment = useDeviceStore.getState().enrollment
+        if (cancelled || enrollment?.qrToken !== qrToken) return
         const next = {
           ...enrollment,
           simpleCode: info.simple_code ?? enrollment.simpleCode,
@@ -34,5 +38,5 @@ export function useDeviceSessionSync() {
     return () => {
       cancelled = true
     }
-  }, [enrollment])
+  }, [qrToken])
 }

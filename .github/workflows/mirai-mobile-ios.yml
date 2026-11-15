@@ -79,11 +79,13 @@ jobs:
             exit 1
           fi
 
-      - name: Build for simulator (no signing)
+      - name: Build for simulator (ad-hoc signed, E2E)
         working-directory: src/mobile/ios
         env:
-          # Inlined in the JS bundle: this build talks to the mock DMZ only.
+          # Inlined in the JS bundle: this build talks to the mock DMZ only
+          # and enables the simulator workarounds of src/e2e.ts.
           MIRAI_API_URL: http://localhost:4010
+          MIRAI_E2E: "1"
         run: |
           set -o pipefail
           xcodebuild \
@@ -93,7 +95,8 @@ jobs:
             -sdk iphonesimulator \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             build | tee xcodebuild.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" xcodebuild.log
 
@@ -184,6 +187,9 @@ jobs:
           unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
 
+      - name: Prepare the shared-file fixture
+        run: e2e/prepare-fixture.sh
+
       - name: Install the app and grant permissions
         run: |
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
@@ -198,7 +204,8 @@ jobs:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: "240000"
         run: |
           run() {
-            maestro --device "$SIMULATOR_UDID" test e2e/maestro \
+            # Flows tagged `microphone` need a working simulator mic: local only.
+            maestro --device "$SIMULATOR_UDID" test e2e/maestro --include-tags ci \
               --format junit --output maestro-report.xml \
               --test-output-dir maestro-output --debug-output maestro-debug
           }
@@ -209,7 +216,8 @@ jobs:
       - name: Check what the mock DMZ received
         run: |
           curl -fs http://localhost:4010/__e2e/state | tee mock-state.json
-          jq -e '(.enrollments | length) >= 1 and (.uploads | length) >= 1' mock-state.json
+          # One upload at least, and no session polling loop.
+          jq -e '(.enrollments | length) >= 1 and (.uploads | length) >= 1 and .sessionCalls < 10' mock-state.json
 
       - name: Collect simulator diagnostics
         if: failure()

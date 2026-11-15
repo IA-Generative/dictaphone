@@ -1,0 +1,19 @@
+# Upload puis pipeline serveur (statuts poussés par Socket.IO), jusqu'à la
+# disparition de la ligne. Statuts reconnus en anglais et en français.
+appId: fr.gouv.mirai.audio-secure
+env:
+  PIPELINE_STATUS: ".*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete|Analyse antivirale|Fichier sain|Transcodage|Intégré à votre compte|Transcription terminée).*"
+  DONE_STATUS: ".*(Transcription complete|Transcription terminée).*"
+---
+- extendedWaitUntil:
+    visible: ${PIPELINE_STATUS}
+    timeout: 30000
+- takeScreenshot: pipeline
+- extendedWaitUntil:
+    visible: ${DONE_STATUS}
+    timeout: 30000
+- takeScreenshot: done
+# La ligne disparaît quelques secondes après le succès final.
+- extendedWaitUntil:
+    notVisible: ${DONE_STATUS}
+    timeout: 15000

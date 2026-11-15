@@ -13,9 +13,9 @@ module.exports = {
         },
       },
     ],
-    // E2E only: lets a build point at the mock DMZ (MIRAI_API_URL). Unset in
-    // normal builds, so the production host below is used.
-    ['transform-inline-environment-variables', { include: ['MIRAI_API_URL'] }],
+    // E2E only: MIRAI_API_URL points a build at the mock DMZ, MIRAI_E2E
+    // enables simulator workarounds (src/e2e.ts). Both unset in store builds.
+    ['transform-inline-environment-variables', { include: ['MIRAI_API_URL', 'MIRAI_E2E'] }],
     // must be the last one
     'react-native-worklets/plugin',
   ],

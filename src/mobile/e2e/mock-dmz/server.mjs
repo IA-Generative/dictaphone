@@ -35,7 +35,8 @@ const PIPELINE = [
   FINAL_STATUS,
 ]
 
-const state = { enrollments: [], uploads: [], heartbeats: 0 }
+const SESSION_EXPIRES_AT = new Date(Date.now() + 7 * 86400_000).toISOString()
+const state = { enrollments: [], uploads: [], heartbeats: 0, sessionCalls: 0 }
 const deviceTokens = new Set()
 
 const send = (res, status, body, headers = {}) => {
@@ -122,13 +123,14 @@ const routes = async (req, res) => {
   }
 
   if (req.method === 'GET' && path.startsWith('/api/device/session/')) {
+    state.sessionCalls += 1
     const enrolled = authorized(req)
     return send(res, 200, {
       status: enrolled ? 'enrolled' : 'needs_enrollment',
       can_upload: enrolled,
       can_view: enrolled,
       simple_code: SIMPLE_CODE,
-      expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+      expires_at: SESSION_EXPIRES_AT,
       revalidate_interval_seconds: 3600,
       max_validation_failure_seconds: 14400,
     })
@@ -170,6 +172,7 @@ const routes = async (req, res) => {
     state.enrollments = []
     state.uploads = []
     state.heartbeats = 0
+    state.sessionCalls = 0
     deviceTokens.clear()
     return send(res, 204, '')
   }
