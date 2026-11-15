@@ -1,0 +1,49 @@
+# Parcours principal MIrAI contre le faux serveur DMZ (e2e/mock-dmz) :
+# enrôlement par code court, enregistrement, upload, suivi du pipeline
+# serveur jusqu'à la disparition de la ligne.
+appId: fr.gouv.mirai.audio-secure
+name: Enrôlement, enregistrement et upload
+env:
+  SIMPLE_CODE: E2E123
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    permissions:
+      microphone: allow
+      notifications: allow
+
+# Enrôlement par code court (le QR n'est pas scannable sur simulateur)
+- tapOn: 'Enter a code'
+- tapOn: 'ABC123'
+- inputText: ${SIMPLE_CODE}
+- tapOn: 'Validate'
+- extendedWaitUntil:
+    visible: 'New recording'
+    timeout: 15000
+
+# Enregistrement de quelques secondes
+- tapOn: 'New recording'
+- extendedWaitUntil:
+    visible: 'Recording in progress'
+    timeout: 15000
+- takeScreenshot: recording
+# Pas de « sleep » dans Maestro : on attend un élément qui n'apparaîtra pas.
+- extendedWaitUntil:
+    visible: 'e2e-never-visible'
+    timeout: 4000
+    optional: true
+- tapOn: 'End'
+
+# Upload puis pipeline serveur (statuts poussés par Socket.IO)
+- extendedWaitUntil:
+    visible: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete).*'
+    timeout: 30000
+- takeScreenshot: pipeline
+- extendedWaitUntil:
+    visible: '.*Transcription complete.*'
+    timeout: 30000
+# La ligne disparaît quelques secondes après le succès final.
+- extendedWaitUntil:
+    notVisible: '.*Transcription complete.*'
+    timeout: 15000

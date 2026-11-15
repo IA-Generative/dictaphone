@@ -1,9 +1,10 @@
-name: MIrAI mobile iOS build
+name: MIrAI mobile iOS build and e2e
 
 # Fork-only workflow (kept apart from upstream's dictaphone-mobile.yml to
 # avoid merge conflicts). Compiles the iOS app for the simulator, without
 # code signing, so native breakages (pods, React Native upgrades, native
-# modules) are caught on every PR instead of on a developer's Mac.
+# modules) are caught on every PR, then runs the Maestro end-to-end flows
+# against the mock DMZ (src/mobile/e2e).
 
 on:
   push:
@@ -68,12 +69,21 @@ jobs:
 
       - name: Install pods
         working-directory: src/mobile/ios
-        # --deployment fails if Podfile.lock is out of date instead of
-        # silently rewriting it.
-        run: bundle exec pod install --deployment
+        # Fail if Podfile.lock is out of date. The hermes-engine checksum
+        # depends on the machine that ran `pod install` (known React Native
+        # behaviour), so that single line is ignored.
+        run: |
+          bundle exec pod install
+          if git diff -U0 Podfile.lock | grep -E '^[+-] ' | grep -vE '^[+-]  hermes-engine: [0-9a-f]+$'; then
+            echo "::error::Podfile.lock is out of date: run pod install and commit it"
+            exit 1
+          fi
 
       - name: Build for simulator (no signing)
         working-directory: src/mobile/ios
+        env:
+          # Inlined in the JS bundle: this build talks to the mock DMZ only.
+          MIRAI_API_URL: http://localhost:4010
         run: |
           set -o pipefail
           xcodebuild \
@@ -93,6 +103,64 @@ jobs:
           name: mirai-ios-simulator-app
           path: src/mobile/ios/build/Build/Products/Release-iphonesimulator/*.app
           retention-days: 7
+
+      - name: Start mock DMZ
+        run: |
+          node e2e/mock-dmz/server.mjs > mock-dmz.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fs http://localhost:4010/healthz && exit 0
+            sleep 1
+          done
+          cat mock-dmz.log
+          exit 1
+
+      - name: Setup Java (Maestro)
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Maestro
+        env:
+          MAESTRO_VERSION: "2.11.0"
+          MAESTRO_SHA256: 5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/maestro.zip" \
+            "https://github.com/mobile-dev-inc/maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+          echo "${MAESTRO_SHA256}  $RUNNER_TEMP/maestro.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Boot simulator and install the app
+        run: |
+          UDID=$(xcrun simctl list devices available -j \
+            | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid')
+          echo "Simulator: $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" ios/build/Build/Products/Release-iphonesimulator/*.app
+
+      - name: Run Maestro flows
+        run: maestro test e2e/maestro --format junit --output maestro-report.xml --debug-output maestro-debug
+
+      - name: Check what the mock DMZ received
+        run: |
+          curl -fs http://localhost:4010/__e2e/state | tee mock-state.json
+          jq -e '(.enrollments | length) >= 1 and (.uploads | length) >= 1' mock-state.json
+
+      - name: Upload e2e report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-report
+          path: |
+            src/mobile/maestro-report.xml
+            src/mobile/maestro-debug
+            src/mobile/mock-dmz.log
+            src/mobile/mock-state.json
+            ~/.maestro/tests
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload build log on failure
         if: failure()
