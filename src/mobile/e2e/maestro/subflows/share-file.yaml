@@ -1,0 +1,10 @@
+# Met en file /tmp/mirai-e2e/${FILE} comme un fichier partagé vers l'app
+# (lien e2e-ingest, builds E2E uniquement). La confirmation iOS d'ouverture
+# du lien est traitée une fois pour toutes par setup/approve-open-link.yaml.
+appId: fr.gouv.mirai.audio-secure
+---
+# Sur un simulateur CI lent, la commande peut expirer alors que l'app a bien
+# reçu le lien : la suite vérifie le résultat.
+- openLink:
+    link: fr-gouv-assistant-transcripts://e2e-ingest?path=/tmp/mirai-e2e/${FILE}
+    optional: true

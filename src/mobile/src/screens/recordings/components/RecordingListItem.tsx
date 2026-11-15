@@ -612,6 +612,7 @@ export function RecordingListItem({
                 {item.title}
               </AppText>
               <AppText
+                testID={`recording-meta-${item.id}`}
                 variant="muted"
                 size="md"
                 numberOfLines={
@@ -632,6 +633,7 @@ export function RecordingListItem({
                   <Pressable
                     onPress={() => retryRecordingUpload(item.id)}
                     accessibilityRole="button"
+                    testID={`retry-upload-${item.id}`}
                     accessibilityLabel={t('recordings.menu.retryUpload')}
                     style={({ pressed }) => [
                       styles.retryUploadAction,
@@ -648,6 +650,7 @@ export function RecordingListItem({
                   <Pressable
                     onPress={handleDeleteBlockedRecording}
                     accessibilityRole="button"
+                    testID={`delete-blocked-${item.id}`}
                     accessibilityLabel={t('recordings.menu.deleteLocal')}
                     style={({ pressed }) => [
                       styles.retryUploadAction,

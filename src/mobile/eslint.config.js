@@ -46,5 +46,33 @@ export default [
     },
   },
 
+  // Node scripts for the end-to-end bench (mock DMZ).
+  {
+    files: ['e2e/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        Buffer: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        setTimeout: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
+
+  // Maestro scripts run in Maestro's JS engine (http, env variables).
+  {
+    files: ['e2e/maestro/scripts/*.js'],
+    languageOptions: {
+      globals: {
+        http: 'readonly',
+        SCENARIO: 'readonly',
+        MIN_UPLOADS: 'readonly',
+        MIN_BYTES: 'readonly',
+      },
+    },
+  },
+
   prettier,
 ]

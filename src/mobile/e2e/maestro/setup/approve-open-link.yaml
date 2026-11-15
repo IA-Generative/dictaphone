@@ -1,0 +1,22 @@
+# À jouer une fois sur un simulateur neuf (CI), avant les parcours : iOS
+# demande « Open in "Assistant Transcripts"? » à la première ouverture d'un
+# lien vers l'app, parfois plusieurs secondes après. On répond ici une fois
+# pour toutes, pour que les parcours n'aient pas à guetter cette fenêtre.
+appId: fr.gouv.mirai.audio-secure
+---
+- launchApp:
+    clearState: true
+# Lien sans effet dans l'app (ce n'est pas un fichier).
+- openLink: fr-gouv-assistant-transcripts://e2e-warmup
+- repeat:
+    while:
+      notVisible: '(Open in .*|Ouvrir dans .*)'
+    times: 15
+    commands:
+      - waitForAnimationToEnd:
+          timeout: 1000
+- runFlow:
+    when:
+      visible: '(Open in .*|Ouvrir dans .*)'
+    commands:
+      - tapOn: '(Open|Ouvrir)'

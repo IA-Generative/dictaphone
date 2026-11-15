@@ -16,7 +16,7 @@ export type UploadResponse = {
 // URL-encode them. Diacritics are normalized to their base letter, every
 // remaining non-[A-Za-z0-9._-] becomes a hyphen, and consecutive
 // separators are collapsed.
-function sanitizeFilename(filename: string): string {
+export function sanitizeFilename(filename: string): string {
   return (
     filename
       .normalize('NFKD')
@@ -29,7 +29,7 @@ function sanitizeFilename(filename: string): string {
   )
 }
 
-function guessMimeType(filename: string): string {
+export function guessMimeType(filename: string): string {
   const ext = filename.toLowerCase().split('.').pop() ?? ''
   switch (ext) {
     case 'm4a':

@@ -57,6 +57,7 @@ export default function LoginScreen({ navigation, route }: LoginScreenProps) {
               pressed && styles.secondaryButtonPressed,
             ]}
             onPress={() => navigation.navigate('CodeEntry')}
+            testID="login-enter-code"
           >
             <AppText variant="button">{t('login.enterCodeCta')}</AppText>
           </Pressable>

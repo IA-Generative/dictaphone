@@ -30,6 +30,7 @@ import { deleteLocalRecordingFile } from '@/utils/localRecordingFile'
 import { AppText } from './AppText'
 import { colors } from './colors'
 import { VuMeter } from './VuMeter'
+import { IS_E2E_BUILD } from '@/e2e'
 import { audioLevelFromSamples } from '@/utils/audioLevel'
 import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory' // @ts-expect-error SVG
 import PauseIcon from '@/assets/icons/pause-recording.svg' // @ts-expect-error SVG
@@ -247,6 +248,9 @@ const playCueSound = async (
   soundName: keyof typeof cueSoundAssets,
   shouldContinue: () => boolean = () => true
 ) => {
+  // The CI simulator has no audio output: resuming the playback context
+  // after a recording aborts the app (CoreAudio RPC timeout).
+  if (IS_E2E_BUILD) return
   return enqueueSerializedNativeAudioAction(async () => {
     try {
       const soundBuffer = await loadCueSoundBuffer(soundName)
@@ -1089,6 +1093,7 @@ export const AudioRecorder = () => {
             void onStopRecord()
           }}
           disabled={isLoading}
+          testID="recording-end"
         >
           <StopIcon />
           <AppText variant="button">{t('home.end')}</AppText>

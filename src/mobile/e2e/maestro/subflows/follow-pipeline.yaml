@@ -1,0 +1,30 @@
+# Upload puis pipeline serveur (statuts poussés par Socket.IO), jusqu'à la
+# disparition de la ligne. Statuts reconnus en anglais et en français.
+appId: fr.gouv.mirai.audio-secure
+env:
+  PIPELINE_STATUS: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete|Analyse antivirale|Fichier sain|Transcodage|Intégré à votre compte|Transcription terminée).*'
+---
+# Fichier reçu par le serveur : la ligne attend le pipeline (« En attente »).
+- extendedWaitUntil:
+    visible: '.*(Pending|En attente).*'
+    timeout: 60000
+- runScript: ../scripts/release-pipeline.js
+- extendedWaitUntil:
+    visible: ${PIPELINE_STATUS}
+    timeout: 30000
+- takeScreenshot: pipeline
+# L'app retire la ligne 4 s après le succès final (et seulement après un
+# succès : un échec la bloque). Sur un simulateur lent, le libellé final
+# peut ne rester visible qu'entre deux lectures de l'écran : on attend donc
+# la disparition de la ligne plutôt que ce libellé. Maestro 2.11 abrège les
+# attentes sur un écran immobile, d'où l'interrogation en boucle.
+- repeat:
+    while:
+      visible:
+        id: 'recording-meta-.*'
+    times: 40
+    commands:
+      - waitForAnimationToEnd:
+          timeout: 1000
+- assertNotVisible:
+    id: 'recording-meta-.*'

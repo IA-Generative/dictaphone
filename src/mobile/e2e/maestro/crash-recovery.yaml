@@ -1,0 +1,49 @@
+# L'app est tuée en plein enregistrement : au relancement, les segments
+# déjà écrits (rotation toutes les ~30 s) sont recollés, l'enregistrement
+# récupéré est signalé puis envoyé. Micro requis : local uniquement.
+appId: fr.gouv.mirai.audio-secure
+name: Plantage pendant l'enregistrement puis récupération
+tags:
+  - microphone
+env:
+  SIMPLE_CODE: E2E123
+---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{}'
+- runFlow: subflows/enroll-by-code.yaml
+- tapOn:
+    id: new-recording
+- extendedWaitUntil:
+    visible:
+      id: recording-end
+    timeout: 20000
+# Au moins un segment complet (~30 s) ; le chronomètre fait bouger l'écran,
+# donc cette attente n'est pas abrégée.
+- extendedWaitUntil:
+    visible: 'e2e-never-visible'
+    timeout: 40000
+    optional: true
+- takeScreenshot: before-kill
+- killApp
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible: '(Recovering recordings|Récupération des enregistrements)'
+    timeout: 30000
+- takeScreenshot: recovery
+- extendedWaitUntil:
+    visible: '^(OK)$'
+    timeout: 60000
+- tapOn: '^(OK)$'
+# L'envoi du fichier récupéré part dès le relancement, pendant la fenêtre :
+# on vérifie côté serveur qu'il est arrivé (au moins un segment de ~30 s).
+- extendedWaitUntil:
+    visible: 'e2e-never-visible'
+    timeout: 5000
+    optional: true
+- runScript:
+    file: scripts/assert-uploaded.js
+    env:
+      MIN_BYTES: '300000'

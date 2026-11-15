@@ -1,0 +1,29 @@
+# Le serveur refuse l'upload (401, jeton expiré) : la ligne est bloquée avec
+# le message du serveur et propose Réessayer. Une fois le jeton « renouvelé »
+# (le serveur accepte à nouveau), Réessayer termine l'envoi.
+appId: fr.gouv.mirai.audio-secure
+name: Erreur 401 puis relance
+tags:
+  - ci
+  - errors
+env:
+  SIMPLE_CODE: E2E123
+---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{"uploadFailures":1,"uploadStatus":401,"uploadError":"Jeton expiré : renouvelez-le dans mes-réunions."}'
+- runFlow: subflows/enroll-by-code.yaml
+- runFlow:
+    file: subflows/share-file.yaml
+    env:
+      FILE: reunion-401.m4a
+- extendedWaitUntil:
+    visible: '.*Jeton expiré : renouvelez-le dans mes-réunions.*'
+    timeout: 30000
+- assertVisible:
+    id: 'retry-upload-.*'
+- takeScreenshot: blocked-401
+- tapOn:
+    id: 'retry-upload-.*'
+- runFlow: subflows/follow-pipeline.yaml
