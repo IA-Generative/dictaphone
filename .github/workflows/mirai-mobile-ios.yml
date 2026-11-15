@@ -97,12 +97,65 @@ jobs:
             build | tee xcodebuild.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" xcodebuild.log
 
+      # Tarball: artifacts do not keep file modes, the .app needs them.
+      - name: Package simulator app
+        working-directory: src/mobile/ios/build/Build/Products/Release-iphonesimulator
+        run: tar -czf "$GITHUB_WORKSPACE/mirai-ios-simulator-app.tgz" *.app
+
       - name: Upload simulator app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mirai-ios-simulator-app
-          path: src/mobile/ios/build/Build/Products/Release-iphonesimulator/*.app
+          path: mirai-ios-simulator-app.tgz
           retention-days: 7
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xcodebuild-log
+          path: src/mobile/ios/xcodebuild.log
+          retention-days: 7
+
+  e2e-ios-simulator:
+    needs: build-ios-simulator
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: src/mobile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Boot first: it runs while the next steps download tools.
+      - name: Boot simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j \
+            | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid')
+          echo "Simulator: $UDID"
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+
+      - name: Download simulator app
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mirai-ios-simulator-app
+          path: ${{ runner.temp }}/app
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: yarn
+          cache-dependency-path: src/mobile/yarn.lock
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
 
       - name: Start mock DMZ
         run: |
@@ -131,22 +184,27 @@ jobs:
           unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/maestro/bin" >> "$GITHUB_PATH"
 
-      - name: Boot simulator and install the app
+      - name: Install the app and grant permissions
         run: |
-          UDID=$(xcrun simctl list devices available -j \
-            | jq -r '[.devices[] | .[] | select(.name | startswith("iPhone"))][0].udid')
-          echo "Simulator: $UDID"
-          xcrun simctl boot "$UDID"
-          xcrun simctl bootstatus "$UDID" -b
-          xcrun simctl install "$UDID" ios/build/Build/Products/Release-iphonesimulator/*.app
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          mkdir -p app && tar -xzf "$RUNNER_TEMP/app/mirai-ios-simulator-app.tgz" -C app
+          xcrun simctl install "$SIMULATOR_UDID" app/*.app
+          xcrun simctl privacy "$SIMULATOR_UDID" grant microphone fr.gouv.mirai.audio-secure
 
       - name: Run Maestro flows
         env:
           MAESTRO_CLI_NO_ANALYTICS: "1"
-        run: >-
-          maestro test e2e/maestro
-          --format junit --output maestro-report.xml
-          --test-output-dir maestro-output --debug-output maestro-debug
+          # The XCTest driver can be slow to start on a cold CI simulator.
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: "240000"
+        run: |
+          run() {
+            maestro --device "$SIMULATOR_UDID" test e2e/maestro \
+              --format junit --output maestro-report.xml \
+              --test-output-dir maestro-output --debug-output maestro-debug
+          }
+          # One retry only, for driver start-up flakiness; a real failure
+          # fails twice.
+          run || { echo "::warning::Maestro failed, retrying once"; curl -fs -X POST http://localhost:4010/__e2e/reset; run; }
 
       - name: Check what the mock DMZ received
         run: |
@@ -174,11 +232,3 @@ jobs:
             src/mobile/mock-state.json
           retention-days: 7
           if-no-files-found: ignore
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: xcodebuild-log
-          path: src/mobile/ios/xcodebuild.log
-          retention-days: 7
