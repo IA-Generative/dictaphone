@@ -29,6 +29,8 @@ import { useLocalRecordings } from '@/features/recordings/hooks/useLocalRecordin
 import { deleteLocalRecordingFile } from '@/utils/localRecordingFile'
 import { AppText } from './AppText'
 import { colors } from './colors'
+import { VuMeter } from './VuMeter'
+import { audioLevelFromSamples } from '@/utils/audioLevel'
 import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory' // @ts-expect-error SVG
 import PauseIcon from '@/assets/icons/pause-recording.svg' // @ts-expect-error SVG
 import StopIcon from '@/assets/icons/stop-recording.svg' // @ts-expect-error SVG
@@ -284,6 +286,7 @@ export const AudioRecorder = () => {
     [appLanguage, newTranscriptionLanguage]
   )
   const [recorderPhase, setRecorderPhase] = useState<RecorderPhase>('idle')
+  const [audioLevel, setAudioLevel] = useState(0)
   const [shouldResetNavigation, setShouldResetNavigation] = useState(false)
   const [recordingTimeMs, setRecordingTimeMs] = useState(0)
   const [permissionStatus, setPermissionStatus] =
@@ -625,6 +628,35 @@ export const AudioRecorder = () => {
         recordingDurationInterval.current = null
       }
       isDurationPollQueuedRef.current = false
+    }
+  }, [shouldPollRecordingDuration])
+
+  // Live input level for the VU meter: RMS of the first channel of each raw
+  // buffer, only while actively recording (not while paused).
+  useEffect(() => {
+    if (!shouldPollRecordingDuration) {
+      return
+    }
+
+    // Match the recorder's default 2 channels: with a mismatched channel count
+    // the callback never fires.
+    const result = audioRecorder.onAudioReady(
+      { sampleRate: 48000, bufferLength: 2048, channelCount: 2 },
+      (event) => {
+        try {
+          setAudioLevel(audioLevelFromSamples(event.buffer.getChannelData(0)))
+        } catch (error) {
+          console.warn('VU meter sample read failed', error)
+        }
+      }
+    )
+    if (result.status === 'error') {
+      console.warn('VU meter unavailable:', result.message)
+    }
+
+    return () => {
+      audioRecorder.clearOnAudioReady()
+      setAudioLevel(0)
     }
   }, [shouldPollRecordingDuration])
 
@@ -1023,6 +1055,10 @@ export const AudioRecorder = () => {
         )}
       </View>
 
+      <View style={styles.meterSection}>
+        <VuMeter level={isPaused ? 0 : audioLevel} />
+      </View>
+
       <View style={styles.controlsRow}>
         <Pressable
           style={({ pressed }) => [
@@ -1073,6 +1109,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 36,
     paddingBottom: 20,
+  },
+  meterSection: {
+    width: '70%',
   },
   statusSection: {
     alignItems: 'center',
