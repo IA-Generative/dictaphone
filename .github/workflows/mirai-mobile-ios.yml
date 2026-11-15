@@ -231,6 +231,8 @@ jobs:
           # The XCTest driver can be slow to start on a cold CI simulator.
           MAESTRO_DRIVER_STARTUP_TIMEOUT: "240000"
         run: |
+          # Answer the one-time iOS "Open in…" prompt for app links first.
+          maestro --device "$SIMULATOR_UDID" test e2e/maestro/setup/approve-open-link.yaml
           run() {
             # Flows tagged `microphone` need a working simulator mic: local only.
             maestro --device "$SIMULATOR_UDID" test e2e/maestro --include-tags ci \

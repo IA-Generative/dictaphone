@@ -1,17 +1,6 @@
 # Met en file /tmp/mirai-e2e/${FILE} comme un fichier partagé vers l'app
-# (lien e2e-ingest, builds E2E uniquement).
+# (lien e2e-ingest, builds E2E uniquement). La confirmation iOS d'ouverture
+# du lien est traitée une fois pour toutes par setup/approve-open-link.yaml.
 appId: fr.gouv.mirai.audio-secure
 ---
 - openLink: fr-gouv-assistant-transcripts://e2e-ingest?path=/tmp/mirai-e2e/${FILE}
-# Sur un simulateur neuf (CI), iOS demande « Open in "Assistant
-# Transcripts"? » à la première ouverture du lien. Sans réponse, la fenêtre
-# bloque aussi les parcours suivants.
-- extendedWaitUntil:
-    visible: '(Open in .*|Ouvrir dans .*)'
-    timeout: 3000
-    optional: true
-- runFlow:
-    when:
-      visible: '(Open in .*|Ouvrir dans .*)'
-    commands:
-      - tapOn: '(Open|Ouvrir)'

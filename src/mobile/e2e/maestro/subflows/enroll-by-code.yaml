@@ -10,9 +10,16 @@ appId: fr.gouv.mirai.audio-secure
 - takeScreenshot: 01-login
 - tapOn:
     id: login-enter-code
-- tapOn:
-    id: code-input
-- inputText: ${SIMPLE_CODE}
+# Sur un simulateur CI lent, inputText perd parfois des caractères : on
+# vérifie le champ avant de valider, et on retape si besoin.
+- retry:
+    maxRetries: 3
+    commands:
+      - tapOn:
+          id: code-input
+      - eraseText: 12
+      - inputText: ${SIMPLE_CODE}
+      - assertVisible: ${SIMPLE_CODE}
 - pressKey: Enter
 # Large délai : sur un simulateur CI froid, le premier écran peut mettre
 # plus de 20 s à apparaître après l'enrôlement.
