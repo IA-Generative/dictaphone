@@ -65,7 +65,12 @@ export default [
   {
     files: ['e2e/maestro/scripts/*.js'],
     languageOptions: {
-      globals: { http: 'readonly', SCENARIO: 'readonly' },
+      globals: {
+        http: 'readonly',
+        SCENARIO: 'readonly',
+        MIN_UPLOADS: 'readonly',
+        MIN_BYTES: 'readonly',
+      },
     },
   },
 
