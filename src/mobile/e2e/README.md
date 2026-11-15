@@ -30,17 +30,18 @@ L'app doit être **signée ad hoc** (`CODE_SIGN_IDENTITY=-`), pas seulement comp
 
 ```bash
 cd src/mobile
-e2e/prepare-fixture.sh                               # /tmp/mirai-e2e/reunion-*.m4a
-node e2e/mock-dmz/server.mjs &                       # http://localhost:4010, code E2E123
-cd ios && MIRAI_E2E=1 MIRAI_API_URL=http://localhost:4010 xcodebuild \
-  -workspace AssistantTranscripts.xcworkspace -scheme AssistantTranscripts \
-  -configuration Release -sdk iphonesimulator -derivedDataPath build \
-  CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build && cd ..
-xcrun simctl install booted ios/build/Build/Products/Release-iphonesimulator/*.app
-maestro test e2e/maestro --include-tags ci            # ou sans filtre, si le micro du simulateur marche
-curl -s localhost:4010/__e2e/state
+yarn e2e:ios                        # tous les parcours (micro compris)
+yarn e2e:ios --include-tags ci      # ceux de la CI
+E2E_FULL_BUILD=1 yarn e2e:ios       # forcer un build natif complet
 ```
+
+Le script `e2e/run-local.sh` s'occupe de tout : build si besoin, simulateur, installation, fichiers de test, faux serveur, Maestro.
+
+- Le premier lancement fait un build natif complet : environ 8 min sur un MacBook Pro, tests compris.
+- Ensuite, tant que `ios/`, `package.json` et `yarn.lock` ne changent pas, seul le bundle JS est reconstruit (`e2e/rebundle-app.sh`, environ 30 s). Un lancement complet prend alors environ 3 min.
+
+Prérequis : Xcode, Ruby 3.2 ou plus avec bundler (CocoaPods), Java 17 ou plus, et Maestro (`maestro` dans le `PATH` ou `MAESTRO_BIN`). Pour le parcours micro, il faut aussi autoriser Simulator dans Réglages Système → Confidentialité → Microphone.
 
 ## En CI
 
-Le workflow `mirai-mobile-ios.yml` a deux jobs. Le premier construit l'app E2E (environ 35 min). Le second (environ 10 min) démarre le faux serveur, installe l'app, joue les parcours `ci` puis vérifie l'état du serveur : au moins un enrôlement, au moins un upload, et pas de boucle d'appels à `/session`. En cas d'échec aléatoire, `gh run rerun <id> --failed` relance l'e2e sans reconstruire. Captures, journaux Maestro, journal de l'app et journal du faux serveur sont conservés en artefacts.
+Le workflow `mirai-mobile-ios.yml` a deux jobs. Le premier construit l'app E2E : build natif arm64 mis en cache selon `ios/`, `package.json` et `yarn.lock`. Si ces fichiers n'ont pas changé, seul le bundle JS est reconstruit (quelques minutes). Sinon, il faut compter un build complet d'environ 20 à 30 min. Le second (environ 10 min) démarre le faux serveur, installe l'app, joue les parcours `ci` puis vérifie l'état du serveur : au moins un enrôlement, au moins un upload, et pas de boucle d'appels à `/session`. En cas d'échec aléatoire, `gh run rerun <id> --failed` relance l'e2e sans reconstruire. Captures, journaux Maestro, journal de l'app et journal du faux serveur sont conservés en artefacts.

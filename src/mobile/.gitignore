@@ -75,3 +75,5 @@ yarn-error.log
 !.yarn/versions
 
 android/app/release
+# End-to-end bench build (e2e/run-local.sh)
+ios/build-e2e*

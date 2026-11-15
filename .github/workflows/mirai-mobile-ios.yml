@@ -54,7 +54,18 @@ jobs:
       - name: Install JS dependencies
         run: yarn install --frozen-lockfile
 
+      # The native app only depends on ios/, package.json and yarn.lock.
+      # When they are unchanged (most PRs), reuse the cached native build
+      # and only rebuild the JS bundle (seconds instead of ~30 min).
+      - name: Restore native build
+        id: native-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/mobile/native-cache
+          key: ios-native-e2e-v1-${{ hashFiles('src/mobile/ios/**', 'src/mobile/package.json', 'src/mobile/yarn.lock') }}
+
       - name: Setup Ruby
+        if: steps.native-cache.outputs.cache-hit != 'true'
         uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
         with:
           ruby-version: "4.0"
@@ -62,12 +73,14 @@ jobs:
           working-directory: src/mobile
 
       - name: Cache CocoaPods
+        if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: src/mobile/ios/Pods
           key: pods-${{ runner.os }}-${{ hashFiles('src/mobile/ios/Podfile.lock', 'src/mobile/yarn.lock') }}
 
       - name: Install pods
+        if: steps.native-cache.outputs.cache-hit != 'true'
         working-directory: src/mobile/ios
         # Fail if Podfile.lock is out of date. The hermes-engine checksum
         # depends on the machine that ran `pod install` (known React Native
@@ -79,7 +92,8 @@ jobs:
             exit 1
           fi
 
-      - name: Build for simulator (ad-hoc signed, E2E)
+      - name: Full native build (arm64, ad-hoc signed, E2E)
+        if: steps.native-cache.outputs.cache-hit != 'true'
         working-directory: src/mobile/ios
         env:
           # Inlined in the JS bundle: this build talks to the mock DMZ only
@@ -95,14 +109,32 @@ jobs:
             -sdk iphonesimulator \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             build | tee xcodebuild.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" xcodebuild.log
+          mkdir -p ../native-cache
+          cp -R build/Build/Products/Release-iphonesimulator/*.app ../native-cache/
+          cp Pods/hermes-engine/destroot/bin/hermesc ../native-cache/
+
+      - name: Save native build
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/mobile/native-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+
+      - name: Rebuild the JS bundle only
+        if: steps.native-cache.outputs.cache-hit == 'true'
+        env:
+          MIRAI_API_URL: http://localhost:4010
+          MIRAI_E2E: "1"
+        run: e2e/rebundle-app.sh native-cache/*.app native-cache/hermesc
 
       # Tarball: artifacts do not keep file modes, the .app needs them.
       - name: Package simulator app
-        working-directory: src/mobile/ios/build/Build/Products/Release-iphonesimulator
+        working-directory: src/mobile/native-cache
         run: tar -czf "$GITHUB_WORKSPACE/mirai-ios-simulator-app.tgz" *.app
 
       - name: Upload simulator app
@@ -113,7 +145,7 @@ jobs:
           retention-days: 7
 
       - name: Upload build log on failure
-        if: failure()
+        if: failure() && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: xcodebuild-log
