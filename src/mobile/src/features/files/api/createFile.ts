@@ -2,12 +2,58 @@ import { fetchApi } from '@/api/fetchApi'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiFileItem } from '@/features/files/api/types.ts'
 import { keys } from '@/api/queryKeys.ts'
-import { type UploadProgressCallback, uploadFileToS3 } from '@/utils/fileUpload'
+import {
+  createUploadId,
+  type UploadProgressCallback,
+  uploadFileToS3,
+} from '@/utils/fileUpload'
+import { type TTranscriptionLanguage } from '@/features/ai-jobs/api/types'
+import { ApiError } from '@/api/ApiError'
+import { queryClient } from '@/api/queryClient'
+import { uploadLimitQueryKey } from './uploadLimit'
+import { UploadFinalizationNotFoundError } from '@/api/UploadFinalizationNotFoundError'
 
 type FileSource = {
   name: string
   type: string
   uri: string
+}
+
+export type UploadPreparedCallback = (data: {
+  fileId: string
+  uploadId: string
+}) => void
+
+export const finalizeFileUpload = async (
+  fileId: string
+): Promise<ApiFileItem> => {
+  try {
+    const file = await fetchApi<ApiFileItem>(`/files/${fileId}/upload-ended/`, {
+      method: 'POST',
+      rateLimitScope: 'upload',
+    })
+    void queryClient.invalidateQueries({ queryKey: uploadLimitQueryKey })
+    return file
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 404) {
+      throw new UploadFinalizationNotFoundError(error.body, error.request)
+    }
+    // The request can time out after the backend has already finalized the
+    // file. Reconcile that case instead of treating it as a failed upload.
+    if (error instanceof ApiError && error.statusCode === 400) {
+      const current = await fetchApi<ApiFileItem>(`/files/${fileId}/`, {
+        method: 'GET',
+      })
+      if (
+        current.upload_state === 'ready' ||
+        current.upload_state === 'analyzing'
+      ) {
+        void queryClient.invalidateQueries({ queryKey: uploadLimitQueryKey })
+        return current
+      }
+    }
+    throw error
+  }
 }
 
 /**
@@ -18,10 +64,21 @@ type FileSource = {
  */
 export const uploadFile = async (
   url: string,
+  acl: string | null,
   file: FileSource,
-  onProgress?: UploadProgressCallback
+  onProgress?: UploadProgressCallback,
+  uploadId?: string,
+  wifiOnly = false
 ) => {
-  await uploadFileToS3(file.uri, url, file.type, onProgress)
+  await uploadFileToS3(
+    file.uri,
+    url,
+    acl,
+    file.type,
+    onProgress,
+    uploadId,
+    wifiOnly
+  )
 }
 
 /**
@@ -37,12 +94,23 @@ export const createFile = async ({
   durationSeconds,
   createdAt,
   onProgress,
+  onUploadPrepared,
+  uploadId,
+  wifiOnly = false,
+  source,
+  language,
 }: {
   file: FileSource
   durationSeconds: number
   createdAt: string
   onProgress?: UploadProgressCallback
+  onUploadPrepared?: UploadPreparedCallback
+  uploadId?: string
+  wifiOnly?: boolean
+  source: 'mobile_recording' | 'mobile_file_upload'
+  language: TTranscriptionLanguage
 }): Promise<ApiFileItem> => {
+  const effectiveUploadId = uploadId ?? createUploadId()
   const res = await fetchApi<ApiFileItem>(`/files/`, {
     method: 'POST',
     body: JSON.stringify({
@@ -50,16 +118,28 @@ export const createFile = async ({
       type: 'audio_recording',
       duration_seconds: durationSeconds,
       created_at: createdAt,
+      source,
+      language,
     }),
+    rateLimitScope: 'upload',
+  }).finally(() => {
+    // Rejections may reflect usage changed elsewhere.
+    void queryClient.invalidateQueries({ queryKey: uploadLimitQueryKey })
   })
   if (res.upload_state !== 'pending') {
     throw new Error('State should be pending right after creation')
   }
   const policy = res.policy
-  await uploadFile(policy, file, onProgress)
-  return await fetchApi<ApiFileItem>(`/files/${res.id}/upload-ended/`, {
-    method: 'POST',
-  })
+  onUploadPrepared?.({ fileId: res.id, uploadId: effectiveUploadId })
+  await uploadFile(
+    policy,
+    res.acl === null ? null : (res.acl ?? 'private'),
+    file,
+    onProgress,
+    effectiveUploadId,
+    wifiOnly
+  )
+  return finalizeFileUpload(res.id)
 }
 
 export const useCreateFile = () => {

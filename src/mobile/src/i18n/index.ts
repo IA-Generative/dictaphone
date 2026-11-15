@@ -5,6 +5,7 @@ import {
   format,
   isThisYear,
   isToday,
+  isTomorrow,
   isYesterday,
   setDefaultOptions,
 } from 'date-fns'
@@ -65,6 +66,24 @@ if (!i18n.isInitialized) {
           return i18n.t('shared.utils.durationSeconds', { secs: seconds })
         }
       })
+      i18n.services.formatter!.add('formatDurationLong', (value: Duration) => {
+        // Proper duration formatting like on the web is harder to do, we are fallbacking to a simplier version
+        const hours = (value.hours ?? 0) + (value.days ?? 0) * 24
+        const minutes = value.minutes ?? 0
+
+        if (hours > 0) {
+          if (minutes > 0) {
+            return i18n.t('shared.utils.durationHoursMinutes', {
+              hours: hours,
+              mins: minutes,
+            })
+          } else {
+            return i18n.t('shared.utils.durationHours', { hours: hours })
+          }
+        } else {
+          return i18n.t('shared.utils.durationMins', { mins: minutes })
+        }
+      })
       i18n.services.formatter!.add(
         'formatDateTimeStatic',
         (value, _lng, options) => {
@@ -72,10 +91,11 @@ if (!i18n.isInitialized) {
         }
       )
       i18n.services.formatter!.add('formatDateTime', (value, lng, options) => {
+        const timeFormat = options?.includeSeconds ? 'pp' : 'p'
         if (isToday(value)) {
-          return `${i18n.t('shared.dates.todayAt')} ${format(value, 'p')}`
+          return `${i18n.t('shared.dates.todayAt')} ${format(value, timeFormat)}`
         } else if (isYesterday(value)) {
-          return `${i18n.t('shared.dates.yesterdayAt')} ${format(value, 'p')}`
+          return `${i18n.t('shared.dates.yesterdayAt')} ${format(value, timeFormat)}`
         } else if (isThisYear(value)) {
           // hacky way to remove the year for now, will not work for future locale
           // https://github.com/date-fns/date-fns/pull/3990
@@ -87,13 +107,15 @@ if (!i18n.isInitialized) {
           }
           return `${dateCleaned} ${i18n.t('shared.dates.at')} ${format(
             value,
-            'p'
+            timeFormat
           )}`
         }
-        return format(value, options?.formatStr ?? 'Pp')
+        return format(value, options?.formatStr ?? `P${timeFormat}`)
       })
       i18n.services.formatter!.add('formatDate', (value, lng, options) => {
-        if (isToday(value)) {
+        if (isTomorrow(value)) {
+          return i18n.t('shared.dates.tomorrow')
+        } else if (isToday(value)) {
           return i18n.t('shared.dates.today')
         } else if (isYesterday(value)) {
           return i18n.t('shared.dates.yesterday')
@@ -101,9 +123,9 @@ if (!i18n.isInitialized) {
           // hacky way to remove the year for now, will not work for future locale
           // https://github.com/date-fns/date-fns/pull/3990
           let dateCleaned = format(value, 'PPP')
-          if (lng === 'fr-FR') {
+          if (lng === 'fr') {
             dateCleaned = dateCleaned.split(' ').slice(0, 2).join(' ')
-          } else if (lng === 'en-US') {
+          } else if (lng === 'en') {
             dateCleaned = dateCleaned.split(',')[0].trim()
           }
           return dateCleaned

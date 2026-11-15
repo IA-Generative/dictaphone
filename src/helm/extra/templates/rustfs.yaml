@@ -1,0 +1,128 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rustfs
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 1g
+spec:
+  rules:
+  - host: "rustfs-dictaphone.127.0.0.1.nip.io"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rustfs
+            port:
+              number: 9000
+  tls:
+  - hosts:
+    - rustfs-dictaphone.127.0.0.1.nip.io
+    secretName: dictaphone-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  ports:
+  - name: client
+    port: 9000
+    protocol: TCP
+    targetPort: 9000
+  - name: console
+    port: 9001
+    protocol: TCP
+    targetPort: 9001
+  selector:
+    app.kubernetes.io/instance: extra
+    app.kubernetes.io/name: rustfs
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/instance: extra
+    app.kubernetes.io/name: rustfs
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: extra
+      app.kubernetes.io/name: rustfs
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: extra
+        app.kubernetes.io/name: rustfs
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+      - name: rustfs
+        env:
+          - name: RUSTFS_ACCESS_KEY
+            value: dictaphone
+          - name: RUSTFS_SECRET_KEY
+            value: password
+          - name: RUSTFS_CORS_ALLOWED_ORIGINS
+            value: "https://dictaphone.127.0.0.1.nip.io,http://dictaphone.127.0.0.1.nip.io"
+        image: "rustfs/rustfs:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 9000
+          name: client
+        - containerPort: 9001
+          name: console
+        volumeMounts:
+        - mountPath: /data
+          name: data
+        - mountPath: /etc/ssl/certs/mkcert-ca.pem
+          name: mkcert
+          subPath: rootCA.pem
+      volumes:
+      - name: data
+        emptyDir:
+      - name: mkcert
+        secret:
+          secretName: mkcert
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustfs-bucket
+spec:
+  template:
+    spec:
+      containers:
+      - name: rc
+        image: rustfs/rc:latest
+        command:
+          - /bin/sh
+          - -c
+          - |
+            rc alias set dictaphone http://rustfs:9000 dictaphone password && \
+            rc mb --ignore-existing dictaphone/dictaphone-media-storage && \
+            rc mb --ignore-existing dictaphone/dictaphone-media-alpha && \
+            rc mb --ignore-existing dictaphone/dictaphone-media-beta && \
+            rc admin user add dictaphone dictaphone-default password-default || true; \
+            rc admin user add dictaphone dictaphone-alpha password-alpha || true; \
+            rc admin user add dictaphone dictaphone-beta password-beta || true; \
+            printf '%s' '{"Version":"2012-10-17","Statement":[{"Action":["s3:*"],"Effect":"Allow","Resource":["arn:aws:s3:::dictaphone-media-storage","arn:aws:s3:::dictaphone-media-storage/*"]}]}' >/tmp/default-policy.json && \
+            printf '%s' '{"Version":"2012-10-17","Statement":[{"Action":["s3:*"],"Effect":"Allow","Resource":["arn:aws:s3:::dictaphone-media-alpha","arn:aws:s3:::dictaphone-media-alpha/*"]}]}' >/tmp/alpha-policy.json && \
+            printf '%s' '{"Version":"2012-10-17","Statement":[{"Action":["s3:*"],"Effect":"Allow","Resource":["arn:aws:s3:::dictaphone-media-beta","arn:aws:s3:::dictaphone-media-beta/*"]}]}' >/tmp/beta-policy.json && \
+            rc admin policy create dictaphone default-bucket-policy /tmp/default-policy.json || true; \
+            rc admin policy create dictaphone alpha-bucket-policy /tmp/alpha-policy.json || true; \
+            rc admin policy create dictaphone beta-bucket-policy /tmp/beta-policy.json || true; \
+            rc admin policy attach dictaphone default-bucket-policy --user dictaphone-default || true; \
+            rc admin policy attach dictaphone alpha-bucket-policy --user dictaphone-alpha || true; \
+            rc admin policy attach dictaphone beta-bucket-policy --user dictaphone-beta || true; \
+            exit 0
+      restartPolicy: Never
+  backoffLimit: 3

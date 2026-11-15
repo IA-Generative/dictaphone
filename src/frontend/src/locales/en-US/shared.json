@@ -10,13 +10,34 @@
     "formatDate": "{{value, formatDate}}",
     "formatDateTime": "{{value, formatDateTime}}",
     "formatDateTimeStatic": "{{value, formatDateTimeStatic}}",
-    "duration": "{{duration, formatDuration}}"
+    "duration": "{{duration, formatDuration}}",
+    "durationLong": "{{duration, formatDurationLong}}"
   },
   "dates": {
+    "tomorrow": "Tomorrow",
     "today": "Today",
     "yesterday": "Yesterday",
     "todayAt": "Today at",
     "yesterdayAt": "Yesterday at",
     "at": "at"
+  },
+  "rateLimit": {
+    "title": "Server request limit reached",
+    "waitUntil": "You can try again after {{time}}.",
+    "tryLater": "Please try again later.",
+    "ready": "You can try again now.",
+    "retry": "Try again",
+    "scopes": {
+      "upload": "Server request limit reached. Uploads are temporarily paused.",
+      "transcriptionRetry": "Server request limit reached. Transcription retries are temporarily paused.",
+      "docsCreate": "Server request limit reached. Creating documents is temporarily paused.",
+      "aiResult": "Server request limit reached. Loading transcripts and summaries is temporarily paused."
+    }
+  },
+  "restricted": {
+    "title": "Access denied",
+    "defaultMessage": "Your account isn't authorized to use Transcripts.",
+    "home": "Home",
+    "documentation": "Learn more about access requirements (opens in a new tab)"
   }
 }

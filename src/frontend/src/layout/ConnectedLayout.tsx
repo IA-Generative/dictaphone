@@ -1,4 +1,4 @@
-import { MainLayout, Spinner } from '@gouvfr-lasuite/ui-kit'
+import { MainLayout, Spinner } from '@gouvfr-lasuite/ui-components'
 import LogoApp from '@/layout/LogoApp.tsx'
 import { HeaderRight } from '@/layout/HeaderRight.tsx'
 import { useUser } from '@/features/auth/api/useUser'
@@ -6,16 +6,22 @@ import { Link, Redirect } from 'wouter'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { HelpMenu } from '@/layout/HelpMenu'
+import { usePageTitle } from '@/layout/usePageTitle'
 
 export default function ConnectedLayout({
   children,
+  pageTitle,
+  readonly = false,
   ...rest
 }: {
   children: React.ReactNode
   className?: string
+  pageTitle: string
+  readonly?: boolean
 }) {
   const { t } = useTranslation('layout')
   const user = useUser()
+  usePageTitle(pageTitle)
 
   if (user.isLoading) {
     return <Spinner />
@@ -29,15 +35,19 @@ export default function ConnectedLayout({
     <MainLayout
       hideLeftPanelOnDesktop={true}
       icon={
-        <Link
-          to="/recordings"
-          aria-label={t('home')}
-          style={{ textDecoration: 'none' }}
-        >
+        readonly ? (
           <LogoApp variant="multiline" height={42} alt="" />
-        </Link>
+        ) : (
+          <Link
+            to="/recordings"
+            aria-label={t('home')}
+            style={{ textDecoration: 'none' }}
+          >
+            <LogoApp variant="multiline" height={42} alt="" />
+          </Link>
+        )
       }
-      rightHeaderContent={<HeaderRight />}
+      rightHeaderContent={readonly ? <></> : <HeaderRight />}
       isLeftPanelOpen={false}
     >
       <div

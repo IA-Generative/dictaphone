@@ -1,7 +1,10 @@
 {
   "title": "Audio recording",
   "newRecording": "New recording",
-  "consentWarning": "⚠ Recording requires participants consent",
+  "newRecordingAriaLabel": "Start a new recording",
+  "transcriptionLanguage": "Transcription language:",
+  "transcriptionLanguageAriaLabel": "Select transcription language",
+  "consentWarning": "Recording requires participants' consent",
   "startRecording": "Start recording",
   "pauseRecording": "Pause",
   "resumeRecording": "Resume",
@@ -13,13 +16,20 @@
   "retryUpload": "Retry upload",
   "recordingPrefix": "Recording",
   "preventGoBackAlert": "You are about to leave the recording page. Your recording will be lost if you do so. Please terminate it properly!",
+  "mobileAlert": {
+    "title": "Recording can stop without warning or be unreliable",
+    "description": "On the mobile web version, recording may stop or fail without warning, especially if you lock your phone or switch tabs or apps. In some cases, the resulting recording may be incomplete or unusable. For reliable recording, we strongly recommend using the mobile app, which continues recording even when the screen is locked.",
+    "downloadApp": "Download app",
+    "continueAnyways": "Continue in browser"
+  },
   "source": {
-    "label": "Input source",
+    "ariaLabel": "Select input source",
     "fallbackLabel": "Microphone {{index}}",
     "noInputs": "No microphone source available.",
     "signalLevelAriaLabel": "Microphone signal level",
     "noSoundDetected": "No sound detected!",
-    "lowSound": "Very low sound!"
+    "lowSound": "Very low sound!",
+    "soundOk": "Sound is good!"
   },
   "status": {
     "readyToRecord": "Ready to record",
@@ -48,9 +58,17 @@
   },
   "alerts": {
     "uploadFailedDownloaded": "The recording could not be uploaded after a retry. The file \"{{fileName}}\" has been downloaded and saved on your computer. You can reupload it later or notify the support team.",
-    "lowStorage": "Recording stopped: less than 5 MB of storage is available."
+    "lowStorage": "Recording stopped: less than 20 MB of storage is available.",
+    "storageQuotaExceeded": "Recording stopped: local storage quota was exceeded.",
+    "unkownError": "Recording stopped: an unknown error occurred."
   },
   "errors": {
+    "storageInitializationFailed": "Failed to initialize local recording storage.",
+    "microphonePermissionDenied": "Microphone access is denied. Please allow microphone permission in your browser settings.",
+    "microphonePermissionRequired": "Microphone access is required to start recording.",
+    "persistentStoragePermissionDenied": "Persistent storage access is denied. Please allow persistent storage permission in your browser settings.",
+    "persistentStoragePermissionRequired": "Persistent storage access is required to start recording.",
+    "stopRecordingFailed": "Failed to stop recording cleanly.",
     "recordingFailed": "Recording failed. Check your microphone permissions and try again.",
     "uploadFailed": "Upload failed. Please retry once."
   }

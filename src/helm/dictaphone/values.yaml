@@ -4,17 +4,34 @@
 
 ## @section General configuration
 
-## @param image.repository Repository to use to pull dictaphone's container image
-## @param image.tag dictaphone's container tag
-## @param image.pullPolicy Container image pull policy
-## @extra image.credentials.username Username for container registry authentication
-## @extra image.credentials.password Password for container registry authentication
-## @extra image.credentials.registry Registry url for which the credentials are specified
-## @extra image.credentials.name Name of the generated secret for imagePullSecrets
-image:
-  repository: lasuite/dictaphone-backend
-  pullPolicy: IfNotPresent
-  tag: "latest"
+## @section Images
+## @param images.backend.repository Repository for the backend and backend jobs
+## @param images.backend.tag Backend image tag
+## @param images.backend.pullPolicy Backend image pull policy
+## @param images.frontend.repository Frontend image repository
+## @param images.frontend.tag Frontend image tag
+## @param images.frontend.pullPolicy Frontend image pull policy
+## @param images.audioExtractor.repository Audio extractor image repository
+## @param images.audioExtractor.tag Audio extractor image tag
+## @param images.audioExtractor.pullPolicy Audio extractor image pull policy
+## @extra images.credentials.username Username for container registry authentication
+## @extra images.credentials.password Password for container registry authentication
+## @extra images.credentials.registry Registry url for which the credentials are specified
+## @extra images.credentials.name Name of the generated secret for imagePullSecrets
+images:
+  backend:
+    repository: lasuite/dictaphone-backend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  frontend:
+    repository: lasuite/dictaphone-frontend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  audioExtractor:
+    repository: lasuite/dictaphone-audio-extractor
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  credentials: {}
 
 ## @param nameOverride Override the chart name
 ## @param fullnameOverride Override the full application name
@@ -50,6 +67,65 @@ ingress:
   ## @param ingress.customBackends Add custom backends to ingress
   customBackends: []
 
+## @param ingressPublic.enabled Whether to enable the public API Ingress
+## @param ingressPublic.className IngressClass to use for the Ingress
+## @param ingressPublic.host Host for the Ingress
+## @param ingressPublic.hosts Additional hosts for the Ingress
+## @param ingressPublic.paths Backend route prefixes for the Ingress
+## @param ingressPublic.annotations Annotations for the Ingress
+## @param ingressPublic.tls.enabled Whether to enable TLS for the Ingress
+## @param ingressPublic.tls.secretName Secret name for TLS config (defaults to the main ingress secret)
+## @skip ingressPublic.tls.additional
+## @extra ingressPublic.tls.additional[].secretName Secret name for additional TLS config
+## @extra ingressPublic.tls.additional[].hosts[] Hosts for additional TLS config
+ingressPublic:
+  enabled: false
+  className: null
+  host: dictaphone.example.com
+  hosts: []
+  paths:
+    - /api/
+    - /external-api/
+  # Disable response compression to mitigate BREACH (CVE-2013-3587).
+  # Requires ingress-nginx with configuration snippets allowed.
+  # Clear negotiation for Brotli without requiring its optional module to be loaded.
+  annotations:
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      gzip off;
+      more_clear_input_headers Accept-Encoding;
+      proxy_set_header Accept-Encoding "";
+  tls:
+    secretName: null
+    enabled: true
+    additional: []
+
+## @param ingressInternal.enabled Whether to enable the internal API Ingress
+## @param ingressInternal.className IngressClass to use for the Ingress
+## @param ingressInternal.host Host for the Ingress
+## @param ingressInternal.hosts Additional hosts for the Ingress
+## @param ingressInternal.paths Backend route prefixes for the Ingress
+## @param ingressInternal.annotations Annotations for the Ingress
+## @param ingressInternal.tls.enabled Whether to enable TLS for the Ingress
+## @param ingressInternal.tls.secretName Secret name for TLS config (defaults to the main ingress secret)
+## @skip ingressInternal.tls.additional
+## @extra ingressInternal.tls.additional[].secretName Secret name for additional TLS config
+## @extra ingressInternal.tls.additional[].hosts[] Hosts for additional TLS config
+ingressInternal:
+  enabled: false
+  className: null
+  host: dictaphone.example.com
+  hosts: []
+  paths:
+    - /api/internal/
+    - /api/v1.0/files/media-auth
+    - /api/v1.0/ai-jobs/webhook
+  # Set nginx.ingress.kubernetes.io/whitelist-source-range to trusted CIDRs.
+  annotations: {}
+  tls:
+    secretName: null
+    enabled: true
+    additional: []
+
 ## @param ingressAdmin.enabled whether to enable the Ingress or not
 ## @param ingressAdmin.className IngressClass to use for the Ingress
 ## @param ingressAdmin.host Host for the Ingress
@@ -72,49 +148,56 @@ ingressAdmin:
     enabled: true
     additional: []
 
-## @param ingressMediaFiles.enabled whether to enable the Ingress or not
-## @param ingressMediaFiles.className IngressClass to use for the Ingress
-## @param ingressMediaFiles.host Host for the Ingress
-## @param ingressMediaFiles.path Path to use for the Ingress
+## @param ingressMediaFiles List of media files ingresses to create
+## @param ingressMediaFiles[].name Unique name for the ingress and its provider entry
+## @param ingressMediaFiles[].serviceName Name of the serviceMediaFiles entry to route to (defaults to name)
+## @param ingressMediaFiles[].enabled Whether to enable this Ingress
+## @param ingressMediaFiles[].className IngressClass to use for this Ingress
+## @param ingressMediaFiles[].host Host for this Ingress
+## @param ingressMediaFiles[].path Path to use for this Ingress
 ingressMediaFiles:
-  enabled: false
-  className: null
-  host: dictaphone.example.com
-  path: /media/files/(.*)
-  ## @param ingressMediaFiles.hosts Additional host to configure for the Ingress
-  hosts: []
-  #  - chart-example.local
-  ## @param ingressMediaFiles.tls.enabled Weather to enable TLS for the Ingress
-  ## @param ingressMediaFiles.tls.secretName Secret name for TLS config
-  ## @skip ingressMediaFiles.tls.additional
-  ## @extra ingressMediaFiles.tls.additional[].secretName Secret name for additional TLS config
-  ## @extra ingressMediaFiles.tls.additional[].hosts[] Hosts for additional TLS config
-  tls:
-    secretName: null
-    enabled: true
-    additional: []
+  - name: default
+    serviceName: default
+    enabled: false
+    className: null
+    host: dictaphone.example.com
+    path: /media/(.*)
+    ## @param ingressMediaFiles[].hosts Additional hosts to configure for the Ingress
+    hosts: []
+    ## @param ingressMediaFiles[].tls.enabled Whether to enable TLS for the Ingress
+    ## @param ingressMediaFiles[].tls.secretName Secret name for TLS config
+    ## @skip ingressMediaFiles[].tls.additional
+    ## @extra ingressMediaFiles[].tls.additional[].secretName Secret name for additional TLS config
+    ## @extra ingressMediaFiles[].tls.additional[].hosts[] Hosts for additional TLS config
+    tls:
+      secretName: null
+      enabled: true
+      additional: []
 
-  ## @param ingressMediaFiles.annotations.nginx.ingress.kubernetes.io/use-regex Enable use of regex for ingress paths
-  ## @param ingressMediaFiles.annotations.nginx.ingress.kubernetes.io/auth-url Authentication URL for the ingress
-  ## @param ingressMediaFiles.annotations.nginx.ingress.kubernetes.io/auth-response-headers Headers to pass from auth response
-  ## @param ingressMediaFiles.annotations.nginx.ingress.kubernetes.io/upstream-vhost Upstream host for proxying
-  ## @param ingressMediaFiles.annotations.nginx.ingress.kubernetes.io/configuration-snippet Custom nginx configuration snippet
-  annotations:
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    nginx.ingress.kubernetes.io/auth-url: https://dictaphone.example.com/api/v1.0/files/media-auth/
-    nginx.ingress.kubernetes.io/auth-response-headers: "Authorization, X-Amz-Date, X-Amz-Content-SHA256"
-    nginx.ingress.kubernetes.io/upstream-vhost: minio.dictaphone.svc.cluster.local:9000
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      add_header Content-Security-Policy "default-src 'none'" always;
-      add_header Content-Disposition "attachment";
+    ## @param ingressMediaFiles[].annotations.nginx.ingress.kubernetes.io/use-regex Enable use of regex for ingress paths
+    ## @param ingressMediaFiles[].annotations.nginx.ingress.kubernetes.io/auth-url Authentication URL for the ingress
+    ## @param ingressMediaFiles[].annotations.nginx.ingress.kubernetes.io/auth-response-headers Headers to pass from auth response
+    ## @param ingressMediaFiles[].annotations.nginx.ingress.kubernetes.io/upstream-vhost Upstream host for proxying
+    ## @param ingressMediaFiles[].annotations.nginx.ingress.kubernetes.io/configuration-snippet Custom nginx configuration snippet
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+      nginx.ingress.kubernetes.io/auth-url: https://dictaphone.example.com/api/v1.0/files/media-auth/
+      nginx.ingress.kubernetes.io/auth-response-headers: "Authorization, X-Amz-Date, X-Amz-Content-SHA256"
+      nginx.ingress.kubernetes.io/upstream-vhost: rustfs.dictaphone.svc.cluster.local:9000
+      nginx.ingress.kubernetes.io/configuration-snippet: |
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header Content-Disposition "attachment";
 
-## @param serviceMediaFiles.host
-## @param serviceMediaFiles.port
-## @param serviceMediaFiles.annotations
+## @param serviceMediaFiles List of ExternalName services for media files providers
+## @param serviceMediaFiles[].name Unique name for this provider service
+## @param serviceMediaFiles[].host External hostname for this provider
+## @param serviceMediaFiles[].port Port for this provider
+## @param serviceMediaFiles[].annotations Annotations to add to this Service
 serviceMediaFiles:
-  host: minio.dictaphone.svc.cluster.local
-  port: 9000
-  annotations: {}
+  - name: default
+    host: rustfs.dictaphone.svc.cluster.local
+    port: 9000
+    annotations: {}
 
 ## @section backend
 
@@ -146,8 +229,30 @@ backend:
     ttlSecondsAfterFinished: 30
     backoffLimit: 2
 
-  ## @param backend.securityContext Configure backend Pod security context
-  securityContext: null
+  ## @param backend.managementJobs Named manual management jobs, rendered as suspended CronJobs
+  ## Each entry requires a command (argv list), with optional args, annotations, podLabels,
+  ## resources, backoffLimit (default 0), and ttlSecondsAfterFinished (default 86400).
+  ## Pods carry release/component labels and dictaphone/management-job=<entry-name>.
+  ## Custom podLabels extend these labels; built-in labels cannot be overridden.
+  ## Launch explicitly with kubectl create job --from=cronjob/<name> <unique-run-name>.
+  ## Example:
+  ## managementJobs:
+  ##   backfill-storage-objects:
+  ##     command: [python, manage.py, backfill_storage_objects]
+  ##     args: [--dry-run, --batch-size, "100"]
+  managementJobs: {}
+
+  ## @param backend.securityContext Configure backend container security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param backend.envVars Configure backend container environment variables
   ## @extra backend.envVars.BY_VALUE Example environment variable by setting value directly
@@ -216,8 +321,29 @@ backend:
   ## @param backend.cronjobs[1].name Name of the CronJob
   ## @param backend.cronjobs[1].schedule Schedule in cron format
   ## @param backend.cronjobs[1].command The bash command to execute in the CronJob
+  ## @param backend.cronjobs[2].name Name of the CronJob
+  ## @param backend.cronjobs[2].schedule Schedule in cron format
+  ## @param backend.cronjobs[2].command The bash command to execute in the CronJob
+  ## @param backend.cronjobs[3].name Name of the CronJob
+  ## @param backend.cronjobs[3].schedule Schedule in cron format
+  ## @param backend.cronjobs[3].command The bash command to execute in the CronJob
+  ## @param backend.cronjobs[4].name Name of the CronJob
+  ## @param backend.cronjobs[4].schedule Schedule in cron format
+  ## @param backend.cronjobs[4].command The bash command to execute in the CronJob
 
   cronjobs:
+    - name: delete-original-files-data
+      schedule: "1 0 * * *"
+      command:
+        - "/bin/sh"
+        - "-c"
+        - "python manage.py delete_original_files_data"
+    - name: auto-hard-delete-files
+      schedule: "15 0 * * *"
+      command:
+        - "/bin/sh"
+        - "-c"
+        - "python manage.py auto_hard_delete_files"
     - name: clean-pending-files
       schedule: "30 0 * * *"
       command:
@@ -230,33 +356,35 @@ backend:
         - "/bin/sh"
         - "-c"
         - "python manage.py purge_deleted_files"
+    - name: purge-transcription-usage
+      schedule: "0 1 * * *"
+      command:
+        - "/bin/sh"
+        - "-c"
+        - "python manage.py purge_transcription_usage"
 
-  ## @param backend.probes.liveness.path [nullable] Configure path for backend HTTP liveness probe
-  ## @param backend.probes.liveness.targetPort [nullable] Configure port for backend HTTP liveness probe
-  ## @param backend.probes.liveness.initialDelaySeconds [nullable] Configure initial delay for backend liveness probe
-  ## @param backend.probes.liveness.timeoutSeconds [nullable] Configure timeout for backend liveness probe
-  ## @param backend.probes.liveness.period [nullable] Configure period for backend liveness probe
-  ## @param backend.probes.liveness.periodSeconds [nullable] Configure period for backend liveness probe
-  ## @param backend.probes.startup.path [nullable] Configure path for backend HTTP startup probe
-  ## @param backend.probes.startup.targetPort [nullable] Configure port for backend HTTP startup probe
-  ## @param backend.probes.startup.initialDelaySeconds [nullable] Configure initial delay for backend startup probe
-  ## @param backend.probes.startup.timeoutSeconds [nullable] Configure timeout for backend startup probe
-  ## @param backend.probes.startup.period [nullable] Configure period for backend startup probe
-  ## @param backend.probes.readiness.path [nullable] Configure path for backend HTTP readiness probe
-  ## @param backend.probes.readiness.targetPort [nullable] Configure port for backend HTTP readiness probe
-  ## @param backend.probes.readiness.initialDelaySeconds [nullable] Configure initial delay for backend readiness probe
-  ## @param backend.probes.readiness.timeoutSeconds [nullable] Configure timeout for backend readiness probe
-  ## @param backend.probes.readiness.period [nullable] Configure period for backend readiness probe
-  ## @param backend.probes.readiness.periodSeconds [nullable] Configure period for backend readiness probe
+  ## @param backend.probes Kubernetes probe definitions; set an individual probe to null to disable it
   probes:
+    # Only readiness checks dependencies; outages must not restart the app.
     liveness:
-      path: /__heartbeat__
+      httpGet:
+        path: /__lbheartbeat__
+        port: http
       initialDelaySeconds: 5
       periodSeconds: 30
     readiness:
-      path: /__lbheartbeat__
+      httpGet:
+        path: /__heartbeat__
+        port: http
       initialDelaySeconds: 5
+      timeoutSeconds: 5
       periodSeconds: 30
+    startup:
+      httpGet:
+        path: /__lbheartbeat__
+        port: http
+      periodSeconds: 5
+      failureThreshold: 30
 
   ## @param backend.resources Resource requirements for the backend container
   resources: {}
@@ -275,6 +403,9 @@ backend:
   ## @extra backend.persistence.volume-name.type Type of the additional volume, persistentVolumeClaim or emptyDir
   ## @extra backend.persistence.volume-name.mountPath Path where the volume should be mounted to
   persistence: {}
+
+  ## @param backend.tmpVolume Volume backing writable /tmp; defaults to emptyDir when unset, independent of additional volumes
+  tmpVolume: {}
 
   ## @param backend.extraVolumeMounts Additional volumes to mount on the backend.
   extraVolumeMounts: []
@@ -316,8 +447,17 @@ celeryBackend:
   ## @param celeryBackend.migrateJobAnnotations Annotations for the migrate job
   migrateJobAnnotations: {}
 
-  ## @param celeryBackend.securityContext Configure celeryBackend Pod security context
-  securityContext: null
+  ## @param celeryBackend.securityContext Configure celeryBackend container security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param celeryBackend.envVars Configure celeryBackend container environment variables
   ## @extra celeryBackend.envVars.BY_VALUE Example environment variable by setting value directly
@@ -342,19 +482,7 @@ celeryBackend:
     targetPort: 8000
     annotations: {}
 
-  ## @param celeryBackend.probes Configure celeryBackend probes
-  ## @param celeryBackend.probes.liveness.path [nullable] Configure path for celeryBackend HTTP liveness probe
-  ## @param celeryBackend.probes.liveness.targetPort [nullable] Configure port for celeryBackend HTTP liveness probe
-  ## @param celeryBackend.probes.liveness.initialDelaySeconds [nullable] Configure initial delay for celeryBackend liveness probe
-  ## @param celeryBackend.probes.liveness.initialDelaySeconds [nullable] Configure timeout for celeryBackend liveness probe
-  ## @param celeryBackend.probes.startup.path [nullable] Configure path for celeryBackend HTTP startup probe
-  ## @param celeryBackend.probes.startup.targetPort [nullable] Configure port for celeryBackend HTTP startup probe
-  ## @param celeryBackend.probes.startup.initialDelaySeconds [nullable] Configure initial delay for celeryBackend startup probe
-  ## @param celeryBackend.probes.startup.initialDelaySeconds [nullable] Configure timeout for celeryBackend startup probe
-  ## @param celeryBackend.probes.readiness.path [nullable] Configure path for celeryBackend HTTP readiness probe
-  ## @param celeryBackend.probes.readiness.targetPort [nullable] Configure port for celeryBackend HTTP readiness probe
-  ## @param celeryBackend.probes.readiness.initialDelaySeconds [nullable] Configure initial delay for celeryBackend readiness probe
-  ## @param celeryBackend.probes.readiness.initialDelaySeconds [nullable] Configure timeout for celeryBackend readiness probe
+  ## @param celeryBackend.probes Kubernetes probe definitions; set an individual probe to null to disable it
   probes: {}
 
   ## @param celeryBackend.resources Resource requirements for the celeryBackend container
@@ -375,6 +503,9 @@ celeryBackend:
   ## @extra celeryBackend.persistence.volume-name.mountPath Path where the volume should be mounted to
   persistence: {}
 
+  ## @param celeryBackend.tmpVolume Volume backing writable /tmp; defaults to emptyDir when unset, independent of additional volumes
+  tmpVolume: {}
+
   ## @param celeryBackend.extraVolumeMounts Additional volumes to mount on the celeryBackend.
   extraVolumeMounts: []
 
@@ -385,17 +516,149 @@ celeryBackend:
   pdb:
     enabled: false
 
+## @section audioExtractor
+audioExtractor:
+  ## @param audioExtractor.dpAnnotations Annotations to add to the audio worker Deployment
+  dpAnnotations: {}
+
+  ## @param audioExtractor.command Command used by the audio extraction worker, enforcing its process watchdog
+  command:
+    - "sh"
+    - "/app/run-worker.sh"
+
+  ## @param audioExtractor.args Additional audio worker arguments
+  args: []
+
+  ## @param audioExtractor.transcodingReplicas Amount of transcoding worker replicas
+  transcodingReplicas: 1
+
+  ## @param audioExtractor.validationReplicas Amount of validation worker replicas
+  validationReplicas: 1
+
+  ## @param audioExtractor.terminationGracePeriodSeconds Time for bounded cancellation and cleanup
+  terminationGracePeriodSeconds: 45
+
+  ## @param audioExtractor.strategy Deployment rollout strategy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  ## @param audioExtractor.probes Kubernetes HTTP probes; set an individual probe to null to disable it
+  probes:
+    startup:
+      httpGet:
+        path: /startupz
+        port: health
+      periodSeconds: 2
+      timeoutSeconds: 1
+      failureThreshold: 30
+    liveness:
+      httpGet:
+        path: /livez
+        port: health
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      httpGet:
+        path: /readyz
+        port: health
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 2
+
+  ## @param audioExtractor.shareProcessNamespace Enable share process namespace between containers
+  shareProcessNamespace: false
+
+  ## @param audioExtractor.sidecars Add sidecars containers to audio worker deployment
+  sidecars: []
+
+  ## @param audioExtractor.initContainers Init containers in audio worker Pods
+  initContainers: []
+
+  ## @param audioExtractor.automountServiceAccountToken Mount a service-account token in audio worker Pods
+  automountServiceAccountToken: false
+
+  ## @param audioExtractor.serviceAccountName Existing service account for audio worker Pods
+  serviceAccountName: ""
+
+  ## @param audioExtractor.podSecurityContext Audio worker Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    fsGroup: 10000
+    seccompProfile:
+      type: RuntimeDefault
+
+  ## @param audioExtractor.securityContext Configure audio worker container security context
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    capabilities:
+      drop: ["ALL"]
+
+  ## @param audioExtractor.envVars Configure audio worker environment variables
+  ## @skip audioExtractor.envVars
+  envVars:
+    AUDIO_EXTRACTOR_MAX_RUNTIME_SECONDS: 900
+    AUDIO_EXTRACTOR_PROCESS_TIMEOUT_SECONDS: 1200
+    AUDIO_EXTRACTOR_SHUTDOWN_GRACE_SECONDS: 30
+    AUDIO_EXTRACTOR_POLL_INTERVAL_SECONDS: 5
+    AUDIO_EXTRACTOR_HEALTH_PORT: 8080
+
+  ## @param audioExtractor.transcodingEnvVars Environment variables for the transcoding worker; configure its dedicated API token here
+  transcodingEnvVars: {}
+
+  ## @param audioExtractor.validationEnvVars Environment variables for the validation worker; configure its dedicated API token here
+  validationEnvVars: {}
+
+  ## @param audioExtractor.podAnnotations Annotations to add to the audio worker Pod
+  podAnnotations: {}
+
+  ## @param audioExtractor.resources Resource requirements for the audio worker container
+  resources: {}
+
+  ## @param audioExtractor.nodeSelector Node selector for the audio worker Pod
+  nodeSelector: {}
+
+  ## @param audioExtractor.tolerations Tolerations for the audio worker Pod
+  tolerations: []
+
+  ## @param audioExtractor.affinity Affinity for the audio worker Pod
+  affinity: {}
+
+  ## @param audioExtractor.persistence Additional volumes to create and mount on the audio worker. Used for debugging purposes
+  ## @extra audioExtractor.persistence.volume-name.size Size of the additional volume
+  ## @extra audioExtractor.persistence.volume-name.type Type of the additional volume, persistentVolumeClaim or emptyDir
+  ## @extra audioExtractor.persistence.volume-name.mountPath Path where the volume should be mounted to
+  persistence: {}
+
+  ## @param audioExtractor.workVolume Kubernetes volume source for the /work workspace
+  workVolume:
+    emptyDir:
+      sizeLimit: 4Gi
+
+  ## @param audioExtractor.extraVolumeMounts Additional native Kubernetes volume mounts for audio workers
+  extraVolumeMounts: []
+
+  ## @param audioExtractor.extraVolumes Additional Kubernetes volumes; existingClaim is also supported for PVCs
+  extraVolumes: []
+
+  ## @param audioExtractor.pdb.enabled Enable pdb on the audio worker
+  ## @param audioExtractor.pdb.maxUnavailable Maximum unavailable audio worker Pods (count or percentage)
+  pdb:
+    maxUnavailable: 1
+    enabled: false
+
 ## @section frontend
 
 frontend:
-  ## @param frontend.image.repository Repository to use to pull dictaphone's frontend container image
-  ## @param frontend.image.tag dictaphone's frontend container tag
-  ## @param frontend.image.pullPolicy frontend container image pull policy
-  image:
-    repository: lasuite/dictaphone-frontend
-    pullPolicy: IfNotPresent
-    tag: "latest"
-
   ## @param frontend.dpAnnotations Annotations to add to the frontend Deployment
   dpAnnotations: {}
 
@@ -414,8 +677,17 @@ frontend:
   ## @param frontend.sidecars Add sidecars containers to frontend deployment
   sidecars: []
 
-  ## @param frontend.securityContext Configure frontend Pod security context
-  securityContext: null
+  ## @param frontend.securityContext Configure frontend container security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param frontend.envVars Configure frontend container environment variables
   ## @extra frontend.envVars.BY_VALUE Example environment variable by setting value directly
@@ -440,20 +712,21 @@ frontend:
     targetPort: 8080
     annotations: {}
 
-  ## @param frontend.probes Configure probe for frontend
-  ## @extra frontend.probes.liveness.path Configure path for frontend HTTP liveness probe
-  ## @extra frontend.probes.liveness.targetPort Configure port for frontend HTTP liveness probe
-  ## @extra frontend.probes.liveness.initialDelaySeconds Configure initial delay for frontend liveness probe
-  ## @extra frontend.probes.liveness.initialDelaySeconds Configure timeout for frontend liveness probe
-  ## @extra frontend.probes.startup.path Configure path for frontend HTTP startup probe
-  ## @extra frontend.probes.startup.targetPort Configure port for frontend HTTP startup probe
-  ## @extra frontend.probes.startup.initialDelaySeconds Configure initial delay for frontend startup probe
-  ## @extra frontend.probes.startup.initialDelaySeconds Configure timeout for frontend startup probe
-  ## @extra frontend.probes.readiness.path Configure path for frontend HTTP readiness probe
-  ## @extra frontend.probes.readiness.targetPort Configure port for frontend HTTP readiness probe
-  ## @extra frontend.probes.readiness.initialDelaySeconds Configure initial delay for frontend readiness probe
-  ## @extra frontend.probes.readiness.initialDelaySeconds Configure timeout for frontend readiness probe
-  probes: {}
+  ## @param frontend.probes Kubernetes probe definitions; set an individual probe to null to disable it
+  probes:
+    liveness:
+      httpGet:
+        path: /
+        port: http
+      initialDelaySeconds: 5
+      periodSeconds: 30
+      timeoutSeconds: 2
+    readiness:
+      httpGet:
+        path: /
+        port: http
+      periodSeconds: 5
+      timeoutSeconds: 2
 
   ## @param frontend.resources Resource requirements for the frontend container
   resources: {}
@@ -472,6 +745,9 @@ frontend:
   ## @extra frontend.persistence.volume-name.type Type of the additional volume, persistentVolumeClaim or emptyDir
   ## @extra frontend.persistence.volume-name.mountPath Path where the volume should be mounted to
   persistence: {}
+
+  ## @param frontend.tmpVolume Volume backing writable /tmp; defaults to emptyDir when unset, independent of additional volumes
+  tmpVolume: {}
 
   ## @param frontend.extraVolumeMounts Additional volumes to mount on the frontend.
   extraVolumeMounts: []
@@ -571,3 +847,90 @@ extraManifests: []
 #        {
 #          "feature": "enabled"
 #        }
+
+# Restricted S3 proxy using the audio extractor image. Supply explicit provider rules.
+s3Gateway:
+  enabled: true
+  replicas: 2
+  rules: []
+  ## @param s3Gateway.dpAnnotations Annotations for the gateway Deployment
+  dpAnnotations: {}
+  ## @param s3Gateway.podAnnotations Annotations for gateway Pods
+  podAnnotations: {}
+  ## @param s3Gateway.strategy Deployment update strategy
+  strategy: {}
+  ## @param s3Gateway.automountServiceAccountToken Mount a service-account token in gateway Pods
+  automountServiceAccountToken: false
+  ## @param s3Gateway.serviceAccountName Existing service account for gateway Pods
+  serviceAccountName: ""
+  ## @param s3Gateway.podSecurityContext Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    seccompProfile:
+      type: RuntimeDefault
+  ## @param s3Gateway.securityContext Gateway container security context
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+  ## @param s3Gateway.command Override the gateway container command
+  command: ["python", "-m", "audio_extractor.s3_gateway"]
+  ## @param s3Gateway.args Arguments for the gateway container
+  args: []
+  ## @param s3Gateway.shareProcessNamespace Share the process namespace between containers
+  shareProcessNamespace: false
+  ## @param s3Gateway.sidecars Additional containers in gateway Pods
+  sidecars: []
+  ## @param s3Gateway.initContainers Init containers in gateway Pods
+  initContainers: []
+  ## @param s3Gateway.extraVolumes Additional Kubernetes volume definitions
+  extraVolumes: []
+  ## @param s3Gateway.extraVolumeMounts Additional Kubernetes volume mounts for the gateway container
+  extraVolumeMounts: []
+  ## @param s3Gateway.service.type Gateway Service type
+  ## @param s3Gateway.service.port Gateway Service port used by workers
+  ## @param s3Gateway.service.targetPort Gateway container listening port
+  ## @param s3Gateway.service.annotations Annotations for the gateway Service
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+    annotations: {}
+  ## @param s3Gateway.probes.readiness Kubernetes readiness probe; null disables it
+  ## @param s3Gateway.probes.liveness Kubernetes liveness probe; null disables it
+  ## @param s3Gateway.probes.startup Optional Kubernetes startup probe
+  probes:
+    readiness:
+      httpGet:
+        path: /healthz
+        port: http
+    liveness:
+      httpGet:
+        path: /healthz
+        port: http
+    startup: null
+  ## @param s3Gateway.pdb.enabled Create a gateway PodDisruptionBudget
+  ## @param s3Gateway.pdb.maxUnavailable Maximum unavailable gateway Pods (count or percentage)
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+  terminationGracePeriodSeconds: 45
+  envVars:
+    S3_GATEWAY_FORCE_HTTPS: true
+    S3_GATEWAY_MAX_UPLOAD_BYTES: "1073741824"
+    S3_GATEWAY_MAX_CONCURRENT_REQUESTS: 20
+    S3_GATEWAY_TIMEOUT_SECONDS: 3600
+    S3_GATEWAY_SHUTDOWN_GRACE_SECONDS: 30
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []

@@ -1,3 +1,5 @@
+import { TranscriptionLanguage } from '@/features/settings/settingsStore'
+
 export type RecorderLifecycleState =
   | 'idle'
   | 'starting'
@@ -33,6 +35,10 @@ export type StoredRecording = {
   durationMs: number
   uploadProgress: number
   uploadError: string | null
+  // Set once the audio is stored, so a throttled finalization never re-uploads it.
+  finalizationFileId?: string
+  source: 'web_recording'
+  language: TranscriptionLanguage
 }
 
 export type StoredChunk = {

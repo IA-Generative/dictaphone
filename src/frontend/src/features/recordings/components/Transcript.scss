@@ -10,12 +10,10 @@
 }
 
 .transcript__segment {
-  width: calc(100% + 0.5rem);
   text-align: left;
   border: 1px solid transparent;
   border-radius: 0.625rem;
   padding: 0.25rem 0.25rem;
-  margin-left: -0.25rem;
   background: transparent;
   cursor: text;
   transition:
@@ -83,4 +81,54 @@
 
 .transcript__word-whitespace {
   white-space: pre-wrap;
+}
+
+.transcript-pending {
+  &__skeletons {
+    display: flex;
+    gap: 6px;
+    flex-direction: column;
+
+    &__row {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+
+      :first-child {
+        width: 100px;
+      }
+    }
+  }
+
+  &__message {
+    padding-top: 24px;
+    padding-bottom: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--c--contextuals--content--semantic--neutral--secondary);
+
+    p {
+      text-align: center;
+      max-width: 300px;
+      font-size: 12px;
+      line-height: 16px;
+    }
+  }
+
+  &--audio-extraction {
+    .transcript-pending__message {
+      min-height: 220px;
+    }
+
+    .transcript-pending__message p {
+      margin: 0;
+
+      &:last-child {
+        color: var(--c--contextuals--content--semantic--neutral--tertiary);
+      }
+    }
+  }
 }

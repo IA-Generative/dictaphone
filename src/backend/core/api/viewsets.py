@@ -6,14 +6,16 @@ from logging import getLogger
 from urllib.parse import unquote, urljoin, urlparse
 
 from django.conf import settings
-from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models import Prefetch
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from django_filters import rest_framework as django_filters
 from pydantic import ValidationError
+from requests import RequestException
 from rest_framework import (
     decorators,
     filters,
@@ -30,19 +32,36 @@ from rest_framework import (
 from rest_framework import (
     status as drf_status,
 )
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from core import analytics, models, utils, webhook_models
 from core.api.filters import ListFileFilter
+from core.api.parsers import BoundedWebhookJSONParser, BoundedWebhookMultiPartParser
+from core.audio_jobs import start_audio_extraction
 from core.authentication.webhooks import AiWebhookAuthentication
+from core.configuration import filter_files_by_policy_cutoff, get_bucket_configurations
+from core.object_storage import observe_object, register_file_objects
+from core.payloads import PayloadLimitExceeded, read_stored_result
+from core.storage import get_storage_bucket_name, get_storage_for_file
 from core.tasks.file import (
+    DocumentCreationAlreadyInProgress,
+    PermanentTranscriptionError,
+    TranscriptionAlreadyPending,
     call_transcribe_service,
+    create_document_in_docs,
+    create_transcription_job,
     handle_transcript_received,
     process_file_deletion,
     store_summary,
 )
 
-from ..models import AiFileJob, AiJobStatusChoices, AiJobTypeChoices
-from . import permissions, serializers
+from ..models import (
+    AiFileJob,
+    AiJobStatusChoices,
+    AiJobTypeChoices,
+    FileSourceChoices,
+)
+from . import permissions, serializers, throttling
 
 # pylint: disable=too-many-ancestors
 
@@ -53,9 +72,12 @@ UUID_REGEX = (
     r"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}"
 )
 FILE_EXT_REGEX = r"[\d\w]+"
+BUCKET_REGEX = r"[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?"
 MEDIA_STORAGE_URL_PATTERN = re.compile(
     f"{settings.MEDIA_URL:s}"
-    rf"(?P<key>{FILE_FOLDER:s}/(?P<pk>{UUID_REGEX:s})\.{FILE_EXT_REGEX:s})$"
+    rf"(?:(?P<bucket>{BUCKET_REGEX:s})/)?"
+    rf"(?P<key>{FILE_FOLDER:s}/(?P<pk>{UUID_REGEX:s})"
+    rf"(?:\.{FILE_EXT_REGEX:s}|\.audio\.ogg|/audio/{UUID_REGEX:s}\.ogg))$"
 )
 
 
@@ -235,6 +257,7 @@ class FileViewSet(
     pagination_class = Pagination
     permission_classes = [
         permissions.FilePermission,
+        permissions.CanProcessFiles,
     ]
     queryset = models.File.objects.filter(hard_deleted_at__isnull=True)
     default_serializer_class = serializers.FileSerializer
@@ -245,6 +268,24 @@ class FileViewSet(
     }
     filter_backends = (django_filters.DjangoFilterBackend, filters.OrderingFilter)
     filterset_class = ListFileFilter
+    throttle_classes_by_action = {
+        "create": (
+            throttling.FileCreateThrottleBurst,
+            throttling.FileCreateThrottleSustained,
+        ),
+        "upload_ended": (
+            throttling.FileUploadEndedThrottleBurst,
+            throttling.FileUploadEndedThrottleSustained,
+        ),
+    }
+
+    def get_throttles(self):
+        """Apply per-user limits to file creation and upload finalization."""
+        throttle_classes = self.throttle_classes_by_action.get(self.action)
+        if throttle_classes:
+            # DRF throttles hold request state, so instances must not be shared.
+            return [throttle_class() for throttle_class in throttle_classes]
+        return super().get_throttles()
 
     def get_queryset(self):
         """Get queryset that defaults to the the current request user."""
@@ -252,18 +293,30 @@ class FileViewSet(
         queryset = (
             super()
             .get_queryset()
+            .visible_in_api()
             .select_related("creator")
+            .with_audio_state()
             .prefetch_related(
                 Prefetch("ai_jobs", queryset=AiFileJob.objects.order_by("-created_at"))
             )
         )
-
         if not user.is_authenticated:
             return queryset.none()
 
         # For now, we force the filtering on the current user in all cases, might evolve later
         queryset = queryset.filter(creator=user)
         return queryset
+
+    def list(self, request, *args, **kwargs):
+        """List files and periodically refresh the user's analytics properties."""
+        response = super().list(request, *args, **kwargs)
+        client_source = (
+            "mobile"
+            if isinstance(request.successful_authenticator, JWTAuthentication)
+            else "web"
+        )
+        analytics.capture_files_listed(user=request.user, client_source=client_source)
+        return response
 
     def get_response_for_queryset(self, queryset, context=None):
         """Return paginated response for the queryset if requested."""
@@ -277,6 +330,18 @@ class FileViewSet(
         serializer = self.get_serializer(queryset, many=True, context=context)
         return drf_response.Response(serializer.data)
 
+    @decorators.action(detail=False, methods=["get"], url_path="upload-limit")
+    def upload_limit(self, request):
+        """Report the retained audio uploads counted toward the per-user limit."""
+        file_type = models.FileTypeChoices.AUDIO_RECORDING
+        count = models.File.objects.count_for_upload_limit(request.user, file_type)
+        limit = (
+            settings.FILE_UPLOAD_RESTRICTIONS[file_type]["max_count_by_user"]
+            if settings.FILE_UPLOAD_APPLY_RESTRICTIONS
+            else None
+        )
+        return drf_response.Response({"count": count, "limit": limit})
+
     def perform_create(self, serializer):
         """Set the current user as creator of the newly created file."""
 
@@ -284,11 +349,9 @@ class FileViewSet(
             file_type = serializer.validated_data["type"]
             config_for_file_type = settings.FILE_UPLOAD_RESTRICTIONS[file_type]
 
-            count = models.File.objects.filter(
-                creator=self.request.user,
-                deleted_at__isnull=True,
-                type=file_type,
-            ).count()
+            count = models.File.objects.count_for_upload_limit(
+                self.request.user, file_type
+            )
 
             if count >= config_for_file_type["max_count_by_user"]:
                 logger.info(
@@ -319,126 +382,175 @@ class FileViewSet(
         )
 
     @decorators.action(detail=True, methods=["post"], url_path="upload-ended")
-    def upload_ended(self, request, *args, **kwargs):
+    # pylint: disable=too-many-branches,too-many-statements
+    def upload_ended(self, request, *args, **kwargs):  # noqa: PLR0912, PLR0915
         """
         Check the actual uploaded file and mark it as ready.
         """
-
+        # Ensures we go through authorization checks
         file = self.get_object()
 
-        if not file.is_pending_upload:
-            raise drf_exceptions.ValidationError(
-                {"file": "This action is only available for files in PENDING state."},
-                code="file_upload_state_not_pending",
-            )
-
-        s3_client = default_storage.connection.meta.client
-
-        head_response = s3_client.head_object(
-            Bucket=default_storage.bucket_name, Key=file.file_key
-        )
-        file_size = head_response["ContentLength"]
-
-        if settings.FILE_UPLOAD_APPLY_RESTRICTIONS:
-            config_for_file_type = settings.FILE_UPLOAD_RESTRICTIONS[file.type]
-            if file_size > config_for_file_type["max_size"]:
-                self._complete_file_deletion(file)
-                logger.info(
-                    "upload_ended: file size (%s) for file %s higher than the allowed max size",
-                    file_size,
-                    file.file_key,
-                )
+        # Serialize slot reservations for this creator, including different files.
+        # ANALYZING uploads count too, so the lock need not cover storage I/O.
+        with transaction.atomic():
+            utils.acquire_transaction_lock(f"upload-quota:{file.creator_id}")
+            # Try to update the file with the new state. If the file is already in this state
+            # we are in a concurrent request, and we should reject that request
+            updated_rows = models.File.objects.filter(
+                upload_state=models.FileUploadStateChoices.PENDING,
+                pk=kwargs["pk"],
+            ).update(upload_state=models.FileUploadStateChoices.ANALYZING)
+            if updated_rows != 1:
                 raise drf_exceptions.ValidationError(
-                    detail="The file size is higher than the allowed max size.",
-                    code="file_size_exceeded",
+                    {
+                        "file": "This action is only available for files in PENDING state."
+                    },
+                    code="file_upload_state_not_pending",
                 )
 
-        # python-magic recommends using at least the first 2048 bytes
-        # to reduce incorrect identification.
-        # This is a tradeoff between pulling in the whole file and the most likely relevant bytes
-        # of the file for mime type identification.
-        if file_size > 2048:
-            range_response = s3_client.get_object(
-                Bucket=default_storage.bucket_name,
-                Key=file.file_key,
-                Range="bytes=0-2047",
-            )
-            file_head = range_response["Body"].read()
-        else:
-            file_head = s3_client.get_object(
-                Bucket=default_storage.bucket_name, Key=file.file_key
-            )["Body"].read()
-
-        # Use improved MIME type detection combining magic bytes and file extension
-        logger.info("upload_ended: detected mimetype for file: %s", file.file_key)
-        mimetype = utils.detect_mimetype(file_head, filename=file.filename)
-
-        if (
-            mimetype == "video/mp4"
-            and head_response["ContentType"]
-            in {
-                "audio/mp4",
-                "audio/x-m4a",
-            }
-        ) or (
-            mimetype == "video/webm" and "audio/webm" in head_response["ContentType"]
-        ):
-            logger.info(
-                "upload_ended: detected mimetype for file %s is %s "
-                "but it was declared as %s, leaving it that way.",
-                file.file_key,
-                mimetype,
-                head_response["ContentType"],
-            )
-            mimetype = head_response["ContentType"]
-
-        if settings.FILE_UPLOAD_APPLY_RESTRICTIONS:
-            config_for_file_type = settings.FILE_UPLOAD_RESTRICTIONS[file.type]
-            allowed_file_mimetypes = config_for_file_type["allowed_mimetypes"]
-            if mimetype.replace(" ", "") not in allowed_file_mimetypes:
-                self._complete_file_deletion(file)
-                logger.warning(
-                    "upload_ended: mimetype not allowed %s for file %s",
-                    mimetype,
-                    file.file_key,
+            if settings.FILE_UPLOAD_APPLY_RESTRICTIONS:
+                count = models.File.objects.count_for_upload_limit(
+                    file.creator, file.type
                 )
-                raise drf_exceptions.ValidationError(
-                    detail="The file type is not allowed.",
-                    code="file_type_not_allowed",
-                )
+                if (
+                    count
+                    > settings.FILE_UPLOAD_RESTRICTIONS[file.type]["max_count_by_user"]
+                ):
+                    # Roll back the reservation so the upload can be retried after deletion.
+                    raise drf_exceptions.PermissionDenied(
+                        _("You have reached the maximum number of files for this type.")
+                    )
+        file.refresh_from_db()
 
-        file.upload_state = models.FileUploadStateChoices.READY
-        file.mimetype = mimetype
-        file.size = file_size
+        register_file_objects(file)
 
-        file.save(update_fields=["upload_state", "mimetype", "size"])
+        storage = get_storage_for_file(file)
+        bucket_name = get_storage_bucket_name(storage)
+        s3_client = storage.connection.meta.client
+        validation_error = None
 
-        if head_response["ContentType"] != mimetype:
-            logger.info(
-                "upload_ended: content type mismatch between object storage and file,"
-                " updating from %s to %s",
-                head_response["ContentType"],
-                mimetype,
-            )
+        try:
+            # We copy the file to its final destination, we will run the checks on that
+            # final file and ignore any updates to the temporary file. (We cannot revoke the policy,
+            # so the temporary file might still be updated after that.)
+            # The temporary folders will need to be cleaned periodically
             s3_client.copy_object(
-                Bucket=default_storage.bucket_name,
+                Bucket=bucket_name,
                 Key=file.file_key,
                 CopySource={
-                    "Bucket": default_storage.bucket_name,
-                    "Key": file.file_key,
+                    "Bucket": bucket_name,
+                    "Key": file.temporary_file_key,
                 },
-                ContentType=mimetype,
-                Metadata=head_response["Metadata"],
-                MetadataDirective="REPLACE",
             )
 
-        # Not yet implemented
-        # Change the file.upload_state when this will be done
-        # malware_detection.analyse_file(file.file_key, file_id=file.id)
+            head_response = s3_client.head_object(Bucket=bucket_name, Key=file.file_key)
+            file_size = head_response["ContentLength"]
+            # python-magic recommends using at least the first 2048 bytes
+            # to reduce incorrect identification.
+            # This is a tradeoff between pulling in the whole file and
+            # the most likely relevant bytes
+            # of the file for mime type identification.
+            if file_size > 2048:
+                range_response = s3_client.get_object(
+                    Bucket=bucket_name,
+                    Key=file.file_key,
+                    Range="bytes=0-2047",
+                )
+                file_head = range_response["Body"].read()
+            else:
+                file_head = s3_client.get_object(Bucket=bucket_name, Key=file.file_key)[
+                    "Body"
+                ].read()
+
+            logger.info("upload_ended: detecting mimetype for file: %s", file.file_key)
+            mimetype = utils.detect_mimetype(file_head, filename=file.filename)
+
+            if (
+                mimetype == "video/mp4"
+                and head_response["ContentType"]
+                in {
+                    "audio/mp4",
+                    "audio/x-m4a",
+                }
+            ) or (
+                mimetype == "video/webm"
+                and "audio/webm" in head_response["ContentType"]
+            ):
+                logger.info(
+                    "upload_ended: detected mimetype for file %s is %s "
+                    "but it was declared as %s, leaving it that way.",
+                    file.file_key,
+                    mimetype,
+                    head_response["ContentType"],
+                )
+                mimetype = head_response["ContentType"]
+
+            if settings.FILE_UPLOAD_APPLY_RESTRICTIONS:
+                config_for_file_type = settings.FILE_UPLOAD_RESTRICTIONS[file.type]
+                if file_size > config_for_file_type["max_size"]:
+                    logger.info(
+                        "upload_ended: file size (%s) for file %s higher than the allowed max size",
+                        file_size,
+                        file.file_key,
+                    )
+                    validation_error = drf_exceptions.ValidationError(
+                        detail="The file size is higher than the allowed max size.",
+                        code="file_size_exceeded",
+                    )
+                else:
+                    # Use improved MIME type detection combining magic bytes and file extension
+                    allowed_file_mimetypes = config_for_file_type["allowed_mimetypes"]
+                    if mimetype.replace(" ", "") not in allowed_file_mimetypes:
+                        logger.warning(
+                            "upload_ended: mimetype not allowed %s for file %s",
+                            mimetype,
+                            file.file_key,
+                        )
+                        validation_error = drf_exceptions.ValidationError(
+                            detail="The file type is not allowed.",
+                            code="file_type_not_allowed",
+                        )
+
+            if validation_error is not None:
+                self._complete_file_deletion(file)
+            else:
+                file.upload_state = models.FileUploadStateChoices.READY
+                file.mimetype = mimetype
+                file.size = file_size
+                file.save(update_fields=["upload_state", "mimetype", "size"])
+
+                if head_response["ContentType"] != mimetype:
+                    logger.info(
+                        "upload_ended: content type mismatch between object storage and file,"
+                        " updating from %s to %s",
+                        head_response["ContentType"],
+                        mimetype,
+                    )
+                    s3_client.copy_object(
+                        Bucket=bucket_name,
+                        Key=file.file_key,
+                        CopySource={
+                            "Bucket": bucket_name,
+                            "Key": file.file_key,
+                        },
+                        ContentType=mimetype,
+                        Metadata=head_response["Metadata"],
+                        MetadataDirective="REPLACE",
+                    )
+                observe_object(file.temporary_upload_object)
+                observe_object(file.original_object, publish=True)
+        except Exception as e:
+            logger.exception("Failed to analyze file, reverting to pending state")
+            file.upload_state = models.FileUploadStateChoices.PENDING
+            file.save()
+            raise e
+
+        if validation_error:
+            raise validation_error
 
         serializer = self.get_serializer(file)
 
-        call_transcribe_service.delay(file.id)
+        start_audio_extraction(file.id)
 
         analytics.capture_event(
             analytics.EventName.FILE_UPLOADED,
@@ -448,6 +560,10 @@ class FileViewSet(
                 "mimetype": file.mimetype,
                 "size": file.size,
                 "id": file.id,
+                # If the source is not set, it means it's a mobile recording for now
+                "source": file.source
+                if file.source != FileSourceChoices.UNKNOWN
+                else FileSourceChoices.MOBILE_RECORDING,
             },
         )
 
@@ -546,7 +662,34 @@ class FileViewSet(
             logger.warning("File with ID '%s' does not exist", pk)
             raise drf_exceptions.PermissionDenied() from exc
 
-        user_abilities = file.get_abilities(request.user)
+        expected_bucket = file.configuration.storage_bucket_name
+        requested_bucket = url_params.get("bucket")
+        if requested_bucket is None:
+            requested_bucket = get_bucket_configurations()[
+                "default"
+            ].storage_bucket_name
+        if requested_bucket != expected_bucket:
+            logger.warning(
+                "Media URL bucket '%s' does not match file '%s' bucket '%s'",
+                requested_bucket,
+                file.id,
+                expected_bucket,
+            )
+            raise drf_exceptions.PermissionDenied()
+
+        if (
+            file.lifecycle_state != models.FileLifecycleStateChoices.ACTIVE
+            or timezone.now()
+            >= models.get_original_file_data_cutoff_datetime(
+                file, include_grace_period=False
+            )
+        ):
+            logger.warning("Audio data for file '%s' is no longer available", pk)
+            raise drf_exceptions.PermissionDenied()
+
+        user_abilities = file.get_abilities(
+            request.user, access_status=permissions.get_access_status(request)
+        )
         if not user_abilities.get(self.action, False):
             logger.warning(
                 "User '%s' lacks permission for file '%s'", request.user.id, pk
@@ -573,12 +716,14 @@ class FileViewSet(
             request, MEDIA_STORAGE_URL_PATTERN
         )
 
-        if file.is_pending_upload:
+        if not file.is_ready:
             logger.warning("File '%s' is not ready", file.id)
             raise drf_exceptions.PermissionDenied()
 
         # Generate S3 authorization headers using the extracted URL parameters
-        request = utils.generate_s3_authorization_headers(f"{url_params.get('key'):s}")
+        request = utils.generate_s3_authorization_headers(
+            file, f"{url_params.get('key'):s}"
+        )
 
         return drf_response.Response("authorized", headers=request.headers, status=200)
 
@@ -589,9 +734,35 @@ class AiJobViewSet(
 ):
     """AI jobs API."""
 
-    permission_classes = [permissions.AiJobPermission]
+    permission_classes = [permissions.AiJobPermission, permissions.CanProcessFiles]
     queryset = AiFileJob.objects.select_related("file", "file__creator")
     serializer_class = serializers.AiJobSerializer
+    throttle_classes_by_action = {
+        "retry": (
+            throttling.AiJobRetryThrottleBurst,
+            throttling.AiJobRetryThrottleSustained,
+        ),
+        "create_in_docs": (
+            throttling.AiJobCreateInDocsThrottleBurst,
+            throttling.AiJobCreateInDocsThrottleSustained,
+        ),
+        "transcript": (
+            throttling.AiJobResultThrottleBurst,
+            throttling.AiJobResultThrottleSustained,
+        ),
+        "summary": (
+            throttling.AiJobResultThrottleBurst,
+            throttling.AiJobResultThrottleSustained,
+        ),
+    }
+
+    def get_throttles(self):
+        """Apply per-user limits to AI submissions and result downloads."""
+        throttle_classes = self.throttle_classes_by_action.get(self.action)
+        if throttle_classes:
+            # DRF throttles hold request state, so instances must not be shared.
+            return [throttle_class() for throttle_class in throttle_classes]
+        return super().get_throttles()
 
     def get_queryset(self):
         """Restrict AI jobs to current user except webhook endpoint."""
@@ -604,9 +775,16 @@ class AiJobViewSet(
         if not user.is_authenticated:
             return queryset.none()
 
-        return queryset.filter(
-            file__creator=user,
-            file__hard_deleted_at__isnull=True,
+        return filter_files_by_policy_cutoff(
+            queryset.filter(
+                file__creator=user,
+                file__hard_deleted_at__isnull=True,
+            ),
+            policy="file_hard_delete",
+            field_prefix="file__",
+            comparison="gt",
+        ).exclude(
+            file__lifecycle_state=models.FileLifecycleStateChoices.PENDING_AUTO_HARD_DELETE
         )
 
     def _proxy_ai_result(self, ai_job, expected_type, content_type):
@@ -620,11 +798,14 @@ class AiJobViewSet(
                 code="ai_job_not_completed",
             )
 
-        if not default_storage.exists(ai_job.key):
+        storage = get_storage_for_file(ai_job.file, key=ai_job.key)
+        if not storage.exists(ai_job.key):
             raise drf_exceptions.NotFound()
 
-        with default_storage.open(ai_job.key, "rb") as result_file:
-            content = result_file.read()
+        try:
+            content = read_stored_result(storage, ai_job.key, ai_job.type)
+        except PayloadLimitExceeded as exc:
+            raise drf_exceptions.ValidationError(str(exc)) from exc
 
         return HttpResponse(content=content, content_type=content_type, status=200)
 
@@ -670,13 +851,55 @@ class AiJobViewSet(
             {"doc_url": urljoin(settings.DOCS_BASE_URL, f"docs/{ai_job.docs_app_id}/")}
         )
 
+    @decorators.action(detail=True, methods=["post"], url_path="create-in-docs")
+    def create_in_docs(self, request, *args, **kwargs):
+        """Create the transcript document in Docs synchronously."""
+        ai_job = self.get_object()
+        if ai_job.type != AiJobTypeChoices.TRANSCRIPT:
+            raise drf_exceptions.ValidationError(
+                {"type": "Only transcript jobs can create a Docs document."},
+                code="ai_job_create_in_docs_invalid_type",
+            )
+
+        if ai_job.status != AiJobStatusChoices.SUCCESS:
+            raise drf_exceptions.ValidationError(
+                {"status": "AI job is not completed yet."},
+                code="ai_job_not_completed",
+            )
+
+        if ai_job.docs_app_id:
+            raise drf_exceptions.ValidationError(
+                {"docs_app_id": "AI job is already associated with a document."},
+                code="document_already_exists",
+            )
+
+        try:
+            create_document_in_docs(ai_job.id)
+        except DocumentCreationAlreadyInProgress as exc:
+            raise drf_exceptions.ValidationError(
+                {"docs_app_id": "Document creation is already in progress."},
+                code="document_creation_in_progress",
+            ) from exc
+
+        ai_job.refresh_from_db()
+        if ai_job.docs_app_id is None:
+            raise RuntimeError(
+                "ai_file_job.docs_app_id cannot be None after a successful creation"
+            )
+        return drf_response.Response(
+            {"doc_url": urljoin(settings.DOCS_BASE_URL, f"docs/{ai_job.docs_app_id}/")},
+            status=drf_status.HTTP_201_CREATED,
+        )
+
     @decorators.action(detail=True, methods=["post"], url_path="retry")
-    def retry(self, request, *args, **kwargs):
+    # pylint: disable=too-many-branches
+    def retry(self, request, *args, **kwargs):  # noqa: PLR0912, R0912
         """Retry a transcript job."""
         ai_job = self.get_object()
         serializer = serializers.AiJobRetrySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         language = serializer.validated_data["language"]
+        file = ai_job.file
 
         if ai_job.type != AiJobTypeChoices.TRANSCRIPT:
             raise drf_exceptions.ValidationError(
@@ -692,6 +915,37 @@ class AiJobViewSet(
                 code="ai_job_retry_same_language",
             )
 
+        if (
+            file.audio_extraction_state
+            == models.FileAudioExtractionStateChoices.AUDIO_EXTRACTION_FAILED
+        ):
+            raise drf_exceptions.ValidationError(
+                {"state": "Cannot retry when audio extraction has failed."},
+                code="ai_job_retry_audio_extraction_failed",
+            )
+
+        if (
+            settings.FILE_UPLOAD_APPLY_RESTRICTIONS
+            and file.audio_extraction_state
+            == models.FileAudioExtractionStateChoices.EXTRACTION_DONE
+        ):
+            config_for_file_type = settings.FILE_UPLOAD_RESTRICTIONS[file.type]
+            max_duration_seconds = config_for_file_type["max_duration_seconds"]
+
+            if (
+                file.duration_seconds is None
+                or file.duration_seconds > max_duration_seconds
+            ):
+                logger.warning(
+                    "File duration exceeds maximum allowed for type %s", file.type
+                )
+                raise drf_exceptions.ValidationError(
+                    {
+                        "file": "Cannot retry the file duration is above the allowed max duration."
+                    },
+                    code="file_too_long",
+                )
+
         has_pending_transcript_job = AiFileJob.objects.filter(
             file_id=ai_job.file_id,
             type=AiJobTypeChoices.TRANSCRIPT,
@@ -704,11 +958,52 @@ class AiJobViewSet(
                 code="ai_job_retry_pending",
             )
 
-        new_ai_job_id = call_transcribe_service(ai_job.file_id, language=language)
+        if ai_job.file.lifecycle_state != models.FileLifecycleStateChoices.ACTIVE:
+            raise drf_exceptions.ValidationError(
+                {"state": "Cannot retry when file is not in active state."},
+                code="ai_job_retry_file_not_active",
+            )
+
+        if (
+            file.audio_extraction_state
+            != models.FileAudioExtractionStateChoices.EXTRACTION_DONE
+        ):
+            raise drf_exceptions.ValidationError(
+                {"state": "Cannot retry before audio validation has succeeded."},
+                code="ai_job_retry_audio_not_validated",
+            )
+
         try:
-            new_ai_job = AiFileJob.objects.get(id=new_ai_job_id)
-        except AiFileJob.DoesNotExist as exc:
-            raise drf_exceptions.NotFound() from exc
+            reserved_job = create_transcription_job(
+                ai_job.file_id, language=language, allow_pending=False
+            )
+        except TranscriptionAlreadyPending as exc:
+            raise drf_exceptions.ValidationError(
+                {"state": str(exc)}, code="ai_job_retry_pending"
+            ) from exc
+        except ValueError as exc:
+            raise drf_exceptions.ValidationError(
+                {"state": str(exc)}, code="ai_job_retry_audio_not_validated"
+            ) from exc
+        try:
+            new_ai_job_id = call_transcribe_service(reserved_job.id)
+        except PermanentTranscriptionError, ValueError:
+            new_ai_job_id = reserved_job.id
+        except RequestException:
+            reserved_job.refresh_from_db()
+            if reserved_job.status != AiJobStatusChoices.PENDING:
+                raise
+            # Direct task calls cannot publish Celery autoretries. Continue the
+            # same job asynchronously, counting this failed submission attempt.
+            transaction.on_commit(
+                lambda: call_transcribe_service.apply_async(
+                    args=[reserved_job.id],
+                    retries=1,
+                    countdown=settings.CELERY_TASK_RETRY_BACKOFF_SECONDS,
+                )
+            )
+            new_ai_job_id = reserved_job.id
+        new_ai_job = get_object_or_404(AiFileJob, id=new_ai_job_id)
 
         return drf_response.Response(
             self.serializer_class(new_ai_job, context={"request": request}).data,
@@ -719,21 +1014,24 @@ class AiJobViewSet(
         detail=False,
         methods=["post"],
         url_path="webhook",
+        parser_classes=[BoundedWebhookJSONParser, BoundedWebhookMultiPartParser],
         authentication_classes=[AiWebhookAuthentication],
         permission_classes=[permissions.TranscribeWebhookPermission],
     )
+    @transaction.atomic
     def on_ai_event(self, request):
         """Handle incoming hook events for recordings."""
-        logger.debug("Received transcribe webhook event: %s", request.data)
 
         try:
             payload = webhook_models.webhook_payload_adapter.validate_python(
                 request.data
             )
-        except ValidationError as exc:
-            logger.error("Invalid webhook payload: %s", exc)
-            raise drf_exceptions.ValidationError(detail=exc) from exc
+        except ValidationError:
+            logger.warning("Invalid AI webhook payload")
+            raise drf_exceptions.ValidationError("Invalid webhook payload") from None
 
+        # Read the job state only after any earlier webhook has committed.
+        utils.acquire_transaction_lock(f"ai-job-webhook:{payload.job_id}")
         ai_file_job = AiFileJob.objects.filter(remote_job_id=payload.job_id).first()
         if not ai_file_job:
             logger.warning("No AI file job found for job ID: %s", payload.job_id)
@@ -752,6 +1050,11 @@ class AiJobViewSet(
             handle_transcript_received.apply_async(
                 args=[payload.job_id, payload.transcription_data_url]
             )
+        elif (
+            isinstance(payload, webhook_models.TranscribeWebhookFailurePayload)
+            and payload.error_code == "no_audio_in_file"
+        ):
+            handle_transcript_received.apply_async(args=[payload.job_id, None])
         elif isinstance(payload, webhook_models.SummarizeWebhookSuccessPayload):
             store_summary.apply_async(args=[payload.job_id, payload.summary_data_url])
         elif isinstance(
@@ -761,8 +1064,13 @@ class AiJobViewSet(
                 webhook_models.TranscribeWebhookFailurePayload,
             ),
         ):
-            ai_file_job.status = AiJobStatusChoices.FAILED
-            ai_file_job.save()
+            reason = models.AiJobFailureReasonChoices.UNKNOWN_FAILURE
+            if (
+                isinstance(payload, webhook_models.TranscribeWebhookFailurePayload)
+                and payload.error_code == "media_duration_too_long"
+            ):
+                reason = models.AiJobFailureReasonChoices.AUDIO_TOO_LONG
+            ai_file_job.mark_failed(reason)
             if isinstance(payload, webhook_models.TranscribeWebhookFailurePayload):
                 analytics.capture_event(
                     analytics.EventName.TRANSCRIPT_GENERATION_FAILURE,
@@ -773,6 +1081,7 @@ class AiJobViewSet(
                         ).total_seconds(),
                         "ai_file_job_id": ai_file_job.id,
                         "file_id": ai_file_job.file.id,
+                        "error_code": payload.error_code,
                     },
                 )
 

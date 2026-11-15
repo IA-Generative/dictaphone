@@ -1,7 +1,7 @@
 # Django Dictaphone
 
 # ---- base image to inherit from ----
-FROM python:3.14.4-alpine3.23 AS base
+FROM python:3.14.8-alpine3.24 AS base
 
 # Upgrade pip to its latest release to speed up dependencies installation
 RUN python -m pip install --upgrade pip
@@ -23,7 +23,7 @@ ENV UV_LINK_MODE=copy
 ENV UV_PYTHON_DOWNLOADS=0
 
 # install uv
-COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.4 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -54,7 +54,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 
 # collectstatic
-RUN DJANGO_CONFIGURATION=Build DJANGO_JWT_PRIVATE_SIGNING_KEY=Dummy \
+RUN DJANGO_CONFIGURATION=Build DJANGO_SECRET_KEY=build-only-dummy-key \
   python manage.py collectstatic --noinput
 
 # Replace duplicated file by a symlink to decrease the overall size of the
@@ -92,7 +92,7 @@ WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Generate compiled translation messages
-RUN DJANGO_CONFIGURATION=Build \
+RUN DJANGO_CONFIGURATION=Build DJANGO_SECRET_KEY=build-only-dummy-key \
   python manage.py compilemessages --ignore=".venv/**/*"
 
 # We wrap commands run in this container by the following entrypoint that

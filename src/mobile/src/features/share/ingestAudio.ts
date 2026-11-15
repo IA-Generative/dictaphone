@@ -1,11 +1,23 @@
 import uuid from 'react-native-uuid'
-import { useRecordingsStore } from '@/services/storage'
+import { useRecordingsStore, useSettingsStore } from '@/services/storage'
 
 const AUDIO_EXTENSIONS = ['m4a', 'mp3', 'flac', 'wav', 'aac', 'caf', 'aiff']
 
 export function isAudioFileUrl(url: string): boolean {
   const lower = url.toLowerCase().split('?')[0]
   return AUDIO_EXTENSIONS.some((ext) => lower.endsWith(`.${ext}`))
+}
+
+function deriveFileName(
+  url: string,
+  fallbackName?: string
+): string | undefined {
+  if (fallbackName) return fallbackName
+  try {
+    return decodeURIComponent(url.split('?')[0]).split('/').pop() || undefined
+  } catch {
+    return undefined
+  }
 }
 
 function deriveTitle(url: string, fallbackName?: string): string {
@@ -36,7 +48,11 @@ export function ingestAudioFile(
     filePath: url,
     created_at: new Date().toISOString(),
     duration_seconds: 0,
+    language: useSettingsStore.getState().newTranscriptionLanguage ?? 'fr',
     uploadingStatus: 'to_upload',
+    source: 'mobile_file_upload',
+    // Keep the original extension so the upload is not renamed to .m4a.
+    fileName: deriveFileName(url, options.name),
   })
   return true
 }

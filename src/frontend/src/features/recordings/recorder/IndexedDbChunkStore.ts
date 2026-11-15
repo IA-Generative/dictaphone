@@ -26,6 +26,17 @@ type UpgradeDatabaseWithLegacySupport = IDBPDatabase<RecorderDatabaseSchema> & {
   objectStoreNames: DOMStringList
 }
 
+export const isQuotaExceededError = (error: unknown): boolean => {
+  if (!(error instanceof DOMException || error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.name === 'QuotaExceededError' ||
+    error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+  )
+}
+
 /**
  * IndexedDB-based chunk store for audio recordings.
  * Helps to keep memory usage low and data safe in regards to browser crashes, etc.
@@ -36,6 +47,38 @@ export class IndexedDbChunkStore {
 
   public setActiveRecording(recordingId: string) {
     this.activeRecordingId = recordingId
+  }
+
+  /**
+   * Tries to enable persistent storage, but does not treat rejection as fatal.
+   * Browsers may return false without showing any prompt.
+   */
+  public async ensurePersistentStorage(): Promise<'granted' | 'best-effort'> {
+    if (!navigator.storage?.persisted) {
+      return 'best-effort'
+    }
+
+    try {
+      const persisted = await navigator.storage.persisted()
+      if (persisted) {
+        return 'granted'
+      }
+    } catch (error) {
+      console.error('Error checking persistent storage status:', error)
+      return 'best-effort'
+    }
+
+    if (!navigator.storage?.persist) {
+      return 'best-effort'
+    }
+
+    try {
+      const granted = await navigator.storage.persist()
+      return granted ? 'granted' : 'best-effort'
+    } catch (error) {
+      console.error('Error requesting persistent storage permission:', error)
+      return 'best-effort'
+    }
   }
 
   public async openDatabase() {

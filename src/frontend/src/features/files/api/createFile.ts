@@ -1,24 +1,29 @@
 import { fetchApi } from '@/api/fetchApi'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiFileItem } from '@/features/files/api/types.ts'
-import { keys } from '@/api/queryKeys.ts'
+import { TranscriptionLanguage } from '@/features/settings/settingsStore'
+import { queryClient } from '@/api/queryClient'
+import { uploadLimitQueryKey } from './uploadLimit'
 
 /**
  * Upload a file, using XHR so we can report on progress through a handler.
  *
  * @param url The URL to PUT the file to.
+ * @param acl Acl to use when uploading the file.
  * @param file The file to upload.
  * @param progressHandler A handler that receives progress updates as a single integer `0 <= x <= 100`.
  */
 export const uploadFile = (
   url: string,
+  acl: string | null,
   file: File,
   progressHandler: (progress: number) => void
 ) =>
   new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', url)
-    xhr.setRequestHeader('X-amz-acl', 'private')
+    if (acl !== null) {
+      xhr.setRequestHeader('X-amz-acl', acl)
+    }
     xhr.setRequestHeader('Content-Type', file.type)
 
     xhr.addEventListener('error', reject)
@@ -51,10 +56,14 @@ export const createPendingAudioFile = async ({
   filename,
   durationSeconds,
   createdAt,
+  source,
+  language,
 }: {
   filename: string
   durationSeconds: number
   createdAt: string
+  source: 'web_recording' | 'web_file_upload'
+  language: TranscriptionLanguage
 }) => {
   const pendingFile = await fetchApi<ApiFileItem>(`/files/`, {
     method: 'POST',
@@ -63,7 +72,14 @@ export const createPendingAudioFile = async ({
       filename,
       type: 'audio_recording',
       duration_seconds: durationSeconds,
+      source,
+      language,
     }),
+    rateLimitScope: 'upload',
+  }).finally(() => {
+    // Refresh after creation rejections so
+    // usage changes in another tab also produce the limit alert.
+    void queryClient.invalidateQueries({ queryKey: uploadLimitQueryKey })
   })
 
   if (pendingFile.upload_state !== 'pending') {
@@ -74,48 +90,42 @@ export const createPendingAudioFile = async ({
 }
 
 export const markUploadEnded = async (fileId: string) => {
-  return fetchApi<ApiFileItem>(`/files/${fileId}/upload-ended/`, {
+  const file = await fetchApi<ApiFileItem>(`/files/${fileId}/upload-ended/`, {
     method: 'POST',
+    rateLimitScope: 'upload',
   })
+  void queryClient.invalidateQueries({ queryKey: uploadLimitQueryKey })
+  return file
 }
 
 /**
- * Asynchronously creates a new file and uploads it to the server.
+ * Creates a pending file on the server and uploads the audio to storage.
+ * Finalization is left to the caller, so it can be retried on its own.
  *
- * @param {object} params - The parameters for the file creation and upload process.
- * @param {File} params.file - The file object to be uploaded.
- * @param {function} params.onProgress - A callback function that receives the upload progress as a number (0 to 100).
- * @returns {Promise<ApiFileItem>} A promise that resolves when the file has been successfully uploaded and the server process is completed.
+ * @returns The id of the server file, to pass to `markUploadEnded`.
  */
-export const createFile = async ({
+export const transferAudioFile = async ({
   file,
   durationSeconds,
   onProgress,
   createdAt,
+  source,
+  language,
 }: {
   file: File
   durationSeconds: number
   onProgress: (progress: number) => void
   createdAt: string
-}): Promise<ApiFileItem> => {
+  source: 'web_recording' | 'web_file_upload'
+  language: TranscriptionLanguage
+}): Promise<string> => {
   const pendingFile = await createPendingAudioFile({
     filename: file.name,
     durationSeconds,
     createdAt,
+    source,
+    language,
   })
-  await uploadFile(pendingFile.policy, file, onProgress)
-  return markUploadEnded(pendingFile.id)
-}
-
-export const useCreateFile = () => {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: createFile,
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [keys.files],
-      })
-    },
-  })
+  await uploadFile(pendingFile.policy, pendingFile.acl, file, onProgress)
+  return pendingFile.id
 }

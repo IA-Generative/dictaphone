@@ -53,8 +53,5 @@ export async function enrollDevice(qrToken: string): Promise<void> {
     )
   }
 
-  await Promise.all([
-    setDeviceToken(data.device_token),
-    setQrToken(qrToken),
-  ])
+  await Promise.all([setDeviceToken(data.device_token), setQrToken(qrToken)])
 }

@@ -3,8 +3,8 @@ import { apiUrl } from '@/api/apiUrl'
 import { useMemo } from 'react'
 import { useConfig } from '@/api/useConfig'
 import clsx from 'clsx'
-import { Button } from '@gouvfr-lasuite/cunningham-react'
-import { XMark } from '@gouvfr-lasuite/ui-kit'
+import { Button } from '@gouvfr-lasuite/ui-components'
+import { XMark } from '@gouvfr-lasuite/ui-components/icons'
 import { useTranslation } from 'react-i18next'
 
 export function DownloadMobileAppPopUp({
@@ -24,8 +24,8 @@ export function DownloadMobileAppPopUp({
     <div className={clsx('download-mobile-app-pop-up', !open && 'hidden')}>
       <Button
         className="download-mobile-app-pop-up__close-button"
-        icon={<XMark />}
-        aria-label={'Close the mobile app download pop-up'}
+        icon={<XMark aria-hidden={true} />}
+        aria-label={t('info.mobileApp.closePopupAriaLabel')}
         size="nano"
         variant="tertiary"
         color="neutral"
@@ -37,16 +37,29 @@ export function DownloadMobileAppPopUp({
       </div>
       <div className="download-mobile-app-pop-up__qr-code-container">
         <a href={scanUrl} target="_blank" rel="noreferrer">
-          <QRCodeSVG value={scanUrl} />
+          <QRCodeSVG
+            value={scanUrl}
+            aria-label={t('info.mobileApp.scanQRCodeAriaLabel')}
+          />
         </a>
         <span>{t('info.mobileApp.scanToInstall')}</span>
         <div className="download-mobile-app-pop-up__download-links">
-          <a href={data?.mobile_app?.ios_download_link} target="_blank">
-            <img alt="Apple Logo" src="/assets/files/icons/apple-logo.svg" />
+          <a
+            href={data?.mobile_app?.ios_download_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('info.mobileApp.openInTheAppStoreTitle')}
+          >
+            <img alt="App Store" src="/assets/files/icons/apple-logo.svg" />
           </a>
-          <a href={data?.mobile_app?.android_download_link} target="_blank">
+          <a
+            href={data?.mobile_app?.android_download_link}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('info.mobileApp.openInThePlayStoreTitle')}
+          >
             <img
-              alt="Play store Logo"
+              alt="Play Store"
               src="/assets/files/icons/play-store-logo.svg"
             />
           </a>

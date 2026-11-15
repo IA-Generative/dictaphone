@@ -12,12 +12,16 @@
     "unsupportedExtension": "Unsupported file extension: {{extension}}",
     "tooLarge": "File size exceeds limit: {{value}}",
     "tooLong": "Audio duration ({{duration, formatDuration}}) exceeds limit ({{maxDuration, formatDuration}}).",
+    "unrecognizedAudio": "Audio file not recognized, it might be corrupted. You can try to convert it to ogg first (with ffmpeg for instance).",
     "uploadFailed": "Upload failed"
   },
   "uploader": {
     "toast": "Drop your files here to transfer them",
     "steps": {
-      "preparing": "Preparing the transfer..."
+      "preparing": "Preparing the transfer...",
+      "none": "No files selected for transfer",
+      "upload_files": "Uploading files",
+      "done": "Done"
     },
     "files": {
       "description_one": "{{count}} file being transferred",
@@ -25,5 +29,18 @@
       "description_done_one": "{{count}} file transferred",
       "description_done_other": "{{count}} files transferred"
     }
+  },
+  "fileLimit": {
+    "title": "Recording limit reached",
+    "description": "You’ve reached {{limit}} recordings. Delete some to upload more.",
+    "manageRecordings": "Manage my recordings"
+  },
+  "rateLimit": {
+    "title": "Uploads paused",
+    "resume": "Resume uploads",
+    "paused": "Uploads paused",
+    "keepOpen": "Keep the app open until uploads finish. After reloading, select unfinished files again.",
+    "saved": "Your browser recording is kept on this device.",
+    "finalizing": "Audio uploaded; waiting to complete the upload."
   }
 }

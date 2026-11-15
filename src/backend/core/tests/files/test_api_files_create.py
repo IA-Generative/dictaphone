@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from django.conf import settings as django_settings
+from django.db import connections
 from django.utils import timezone
 
 import pytest
@@ -14,6 +16,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from core import factories
+from core.configuration import clear_configuration_cache
 from core.models import File, FileTypeChoices, FileUploadStateChoices
 
 pytestmark = pytest.mark.django_db
@@ -60,7 +63,33 @@ def test_api_files_create_authenticated_success():
     assert file.title == "my file"
     assert file.creator == user
     assert file.type == FileTypeChoices.AUDIO_RECORDING
+    assert file.language == "fr"
     assert file.upload_state == FileUploadStateChoices.PENDING
+
+
+def test_api_files_create_authenticated_with_custom_language():
+    """Authenticated users should be able to set file language at creation."""
+    user = factories.UserFactory()
+
+    client = APIClient()
+    client.force_login(user)
+
+    response = client.post(
+        "/api/v1.0/files/",
+        {
+            "title": "my file",
+            "filename": "my_file.ogg",
+            "duration_seconds": 1,
+            "type": FileTypeChoices.AUDIO_RECORDING,
+            "language": "en",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.json()
+    file = File.objects.get()
+    assert file.language == "en"
+    assert response.json()["language"] == "en"
 
 
 def test_api_files_create_file_authenticated_no_filename():
@@ -85,10 +114,17 @@ def test_api_files_create_file_authenticated_no_filename():
     assert response.json() == {"filename": ["This field is required."]}
 
 
-def test_api_files_create_file_authenticated_success():
+def test_api_files_create_file_authenticated_success(monkeypatch):
     """
     Authenticated users should be able to create a file file and must provide a filename.
     """
+    monkeypatch.setitem(
+        django_settings.S3_BUCKET_CONFIGURATIONS["default"],
+        "upload_acl",
+        "private",
+    )
+    clear_configuration_cache()
+
     user = factories.UserFactory()
 
     client = APIClient()
@@ -114,6 +150,7 @@ def test_api_files_create_file_authenticated_success():
 
     response_data = response.json()
     assert response_data["creator"] is not None, response_data
+    assert response_data["acl"] == "private"
 
     assert response.json().get("policy") is not None
 
@@ -122,13 +159,13 @@ def test_api_files_create_file_authenticated_success():
 
     assert policy_parsed.scheme == "http"
     assert policy_parsed.netloc == "localhost:9000"
-    assert policy_parsed.path == f"/dictaphone-media-storage/files/{file.id!s}.ogg"
+    assert policy_parsed.path == f"/dictaphone-media-storage/tmp/files/{file.id!s}.ogg"
 
     query_params = parse_qs(policy_parsed.query)
 
     assert query_params.pop("X-Amz-Algorithm") == ["AWS4-HMAC-SHA256"]
     assert query_params.pop("X-Amz-Credential") == [
-        f"dictaphone/{now.strftime('%Y%m%d')}/us-east-1/s3/aws4_request"
+        f"dictaphone-default/{now.strftime('%Y%m%d')}/local/s3/aws4_request"
     ]
     assert query_params.pop("X-Amz-Date") == [now.strftime("%Y%m%dT%H%M%SZ")]
     assert query_params.pop("X-Amz-Expires") == ["60"]
@@ -252,7 +289,7 @@ def test_api_files_create_file_too_many(
     settings,
 ):
     """
-    Creating a file is forbidden if above user limit.
+    Pending and deleted files do not consume slots; retained uploads do.
     """
     settings.FILE_UPLOAD_APPLY_RESTRICTIONS = True
     settings.FILE_UPLOAD_RESTRICTIONS = {
@@ -275,6 +312,21 @@ def test_api_files_create_file_too_many(
     )
 
     assert response.status_code == 201
+    first_file = File.objects.get(pk=response.json()["id"])
+
+    # The first upload is still pending and must not block another creation.
+    response = client.post(
+        "/api/v1.0/files/",
+        {
+            "type": FileTypeChoices.AUDIO_RECORDING,
+            "duration_seconds": 1,
+            "filename": "pending.ogg",
+        },
+    )
+    assert response.status_code == 201
+
+    first_file.upload_state = "ready"
+    first_file.save(update_fields=["upload_state"])
 
     response = client.post(
         "/api/v1.0/files/",
@@ -289,7 +341,18 @@ def test_api_files_create_file_too_many(
     assert response.json() == {
         "type": ["You have reached the maximum number of files for this type."]
     }
-    assert File.objects.count() == 1
+    assert File.objects.count() == 2
+
+    first_file.soft_delete()
+    response = client.post(
+        "/api/v1.0/files/",
+        {
+            "type": FileTypeChoices.AUDIO_RECORDING,
+            "duration_seconds": 1,
+            "filename": "after-deletion.ogg",
+        },
+    )
+    assert response.status_code == 201
 
 
 def test_api_files_create_force_id_success():
@@ -354,19 +417,22 @@ def test_api_files_create_file_race_condition():
     """
 
     def create_file(title):
-        user = factories.UserFactory()
-        client = APIClient()
-        client.force_login(user)
-        return client.post(
-            "/api/v1.0/files/",
-            {
-                "title": title,
-                "type": FileTypeChoices.AUDIO_RECORDING,
-                "duration_seconds": 1,
-                "filename": "my_file.ogg",
-            },
-            format="json",
-        )
+        try:
+            user = factories.UserFactory()
+            client = APIClient()
+            client.force_login(user)
+            return client.post(
+                "/api/v1.0/files/",
+                {
+                    "title": title,
+                    "type": FileTypeChoices.AUDIO_RECORDING,
+                    "duration_seconds": 1,
+                    "filename": "my_file.ogg",
+                },
+                format="json",
+            )
+        finally:
+            connections.close_all()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         future1 = executor.submit(create_file, "my item 1")

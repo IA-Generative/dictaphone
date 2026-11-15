@@ -142,7 +142,11 @@ export class RecorderManager {
 
   private setState(nextState: RecorderLifecycleState) {
     this.state = nextState
-    this.callbacks.onStateChange?.(nextState)
+    try {
+      this.callbacks.onStateChange?.(nextState)
+    } catch (e) {
+      console.error('Failed to notify recorder state change callback.', e)
+    }
   }
 
   private enqueue<T>(fn: () => Promise<T>) {
@@ -172,8 +176,8 @@ export class RecorderManager {
     this.inputGainNode = this.audioContext.createGain()
     this.inputGainNode.gain.value = 1
     this.analyserNode = this.audioContext.createAnalyser()
-    this.analyserNode.fftSize = 1024
-    this.analyserNode.smoothingTimeConstant = 0.4
+    this.analyserNode.fftSize = 512
+    this.analyserNode.smoothingTimeConstant = 0.2
 
     this.inputGainNode.connect(this.analyserNode)
     this.inputGainNode.connect(this.mediaDestination)
@@ -315,6 +319,7 @@ export class RecorderManager {
               await this.callbacks.onChunk?.(chunk)
             } catch (error) {
               console.error('Failed to persist recording chunk', error)
+              throw error
             }
           })
         }

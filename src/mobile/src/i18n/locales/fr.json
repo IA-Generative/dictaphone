@@ -27,9 +27,6 @@
     "label": "Code d'enrôlement",
     "change": "Changer"
   },
-  "mainMenu": {
-    "importAudio": "Importer un fichier audio"
-  },
   "pipeline": {
     "status": {
       "pending": "En attente…",
@@ -65,6 +62,7 @@
     "recordingName": "Enregistrement {{duration}}",
     "newRecording": "Enregistrer",
     "consentNotice": "L'enregistrement nécessite le consentement des participants.",
+    "pickLanguage": "Langue de l'enregistrement :",
     "recordingInProgress": "Enregistrement en cours",
     "recordingPaused": "Enregistrement en pause",
     "recordingSubtitle": "Vous pouvez mettre en pause l'enregistrement quand vous le souhaitez.",
@@ -83,19 +81,37 @@
     "discardRecordingConfirm": "Abandonner",
     "recordingMaxDurationTitle": "Durée maximale d'enregistrement atteinte",
     "recordingMaxDurationMessage": "L'enregistrement s'est arrêté automatiquement.",
-    "recordingMaxDurationConfirm": "OK"
+    "recordingMaxDurationConfirm": "OK",
+    "batteryRestrictionsTitle": "Restrictions possibles",
+    "batteryOptimizationMessage": "Pour garantir que l'enregistrement ne soit pas coupé, veuillez désactiver l'optimisation de la batterie pour l'application dans vos paramètres.",
+    "doNotShowAgain": "Ok, ne plus afficher"
   },
   "recordings": {
+    "fileLimit": {
+      "title": "Limite d’enregistrements atteinte",
+      "description": "Vous avez atteint {{limit}} enregistrements. Supprimez-en pour en envoyer d’autres.",
+      "manageRecordings": "Gérer mes enregistrements"
+    },
     "emptyTitle": "Aucun enregistrement",
-    "emptySubtitle": "Allez dans l'onglet Enregistrer et capturez votre première note audio.",
+    "emptySubtitle": "Commencez un enregistrement ou importez un fichier audio à l'aide des boutons ci-dessous.",
     "pendingTitle": "Envois en attente",
     "manageOnline": "Gérer les enregistrements en ligne",
     "uploading": "Envoi en cours...",
+    "uploadNotifications": {
+      "channelName": "Envois d'enregistrements",
+      "uploadingTitle": "Envoi de l'enregistrement",
+      "uploadingIndeterminate": "Envoi en cours…",
+      "completeTitle": "Envoi terminé",
+      "completeBody": "Ouvrez l'application pour terminer le transfert de l'enregistrement",
+      "failedTitle": "Échec de l'envoi",
+      "failedBody": "Ouvrez l'application pour réessayer le transfert de l'enregistrement"
+    },
     "loginButton": "Se connecter avec ProConnect",
     "delete": "Supprimer",
     "loginHelper": "Connectez-vous pour accéder à vos transcriptions.",
     "deleteTitle": "Supprimer l'enregistrement",
-    "deleteMessage": "Cette action est irréversible.",
+    "deleteMessage": "Êtes-vous sûr de vouloir supprimer cet enregistrement et sa transcription ?",
+    "deleteMessageWithDocsLink": "Êtes-vous sûr de vouloir supprimer cet enregistrement et sa transcription ? La transcription exportée dans Docs restera disponible dans Docs.",
     "deleteConfirm": "Supprimer",
     "deleteCancel": "Annuler",
     "synced": "Synchronisé",
@@ -105,19 +121,74 @@
     "wifiOnlySync": "En attente de WiFi pour synchroniser",
     "syncNow": "Synchroniser maintenant",
     "syncNowHint": "Transférer les enregistrements en attente avec le réseau actuel",
+    "import": {
+      "button": "Importer un fichier audio",
+      "preparing": "Préparation du fichier audio...",
+      "errorTitle": "Impossible d'importer le fichier audio",
+      "errors": {
+        "unsupported_type": "Ce type de fichier n'est pas pris en charge.",
+        "too_large": "Ce fichier est trop volumineux.",
+        "too_long": "Ce fichier audio est trop long.",
+        "unrecognized_audio": "Ce fichier audio ne peut pas être lu.",
+        "generic": "Le fichier audio n'a pas pu être importé."
+      }
+    },
     "listFooter": "Pas d'autres enregistrements",
+    "missingFiles": {
+      "title": "Enregistrements supprimés",
+      "message": "Certains enregistrements locaux ont été supprimés car leurs fichiers audio ne sont plus disponibles sur cet appareil :\n{{files}}",
+      "untitledFallback": "Enregistrement sans titre"
+    },
+    "recoveredFiles": {
+      "title": "Enregistrements récupérés",
+      "message": "Certains fichiers audio locaux ont été trouvés sur cet appareil et réajoutés à vos enregistrements :\n{{files}}"
+    },
+    "recoverModal": {
+      "title": "Récupération des enregistrements",
+      "runningDescription": "L'application s'est probablement arrêtée pendant qu'un enregistrement était en cours. Les fichiers sont en cours de récupération. Veuillez patienter.",
+      "doneDescription": "L'application s'est probablement arrêtée pendant qu'un enregistrement était en cours. Les fichiers récupérés ont été ajoutés à vos enregistrements :",
+      "close": "Fermer",
+      "ok": "OK"
+    },
+    "dataPolicy": {
+      "audioKeptUntil": "L'enregistrement audio est conservé jusqu'au {{value, formatDate}}",
+      "fileKeptUntil": "Ce transcript est conservé jusqu'au {{value, formatDate}}",
+      "alertTitle": "Politique de conservation des données",
+      "alertDescription": "Vos enregistrements sont conservés sur nos serveurs pendant {{originalDataKeptFor}} jours. Les transcriptions (textes) sont conservées pendant {{transcriptDataKeptFor}} jours. Cette politique s'applique aux nouveaux enregistrements et peut différer pour cet enregistrement ou les précédents.",
+      "alertAction": "Compris"
+    },
+    "createInDocsModal": {
+      "title": "Création du document Docs",
+      "description": "Veuillez patienter pendant l'ajout de votre transcription dans Docs."
+    },
     "meta": {
+      "uploadBlocked": {
+        "transient": "Envoi arrêté après plusieurs échecs. Réessayez pour continuer.",
+        "authentication": "Connectez-vous pour réessayer l’envoi.",
+        "permission": "Envoi non autorisé. Vérifiez vos droits ou le quota de fichiers disponible.",
+        "validation": "Envoi refusé. Vérifiez le format et la taille du fichier."
+      },
       "loginToSync": "Se connecter pour synchroniser",
       "offline": "Synchronisera une fois en ligne",
       "processing": "Traitement en cours",
+      "processingLong": "En traitement ∼ {{value}}",
       "uploading": "Envoi en cours",
       "waitingForUpload": "En attente d'envoi",
-      "processingFailed": "Échec du traitement"
+      "processingFailed": "Échec du traitement",
+      "pendingAudioExtraction": "Préparation de l'audio",
+      "extractingAudio": "Conversion de l'audio",
+      "audioExtractionFailed": "Fichier audio invalide"
     },
     "menu": {
+      "retryUpload": "Réessayer l’envoi",
+      "deleteLocal": "Supprimer",
+      "deleteLocalTitle": "Supprimer cet enregistrement ?",
+      "deleteLocalMessage": "Cet enregistrement n’a jamais été envoyé. Il sera définitivement supprimé de cet appareil. Partagez-le d’abord pour en garder une copie.",
       "rename": "Renommer",
-      "retry": "Régénérer",
-      "retryPending": "Régénérer (en cours)",
+      "retry": "Changer la langue",
+      "retryFailed": "Relancer la transcription",
+      "share": "Partager le fichier audio",
+      "retryPending": "Changer la langue (en cours)",
       "renameTitle": "Renommer l'enregistrement",
       "renameDescription": "Choisissez un titre clair pour retrouver rapidement cet enregistrement.",
       "renamePlaceholder": "Titre de l'enregistrement",
@@ -125,11 +196,17 @@
       "errorTitle": "Une erreur est survenue",
       "deleteError": "Impossible de supprimer cet enregistrement pour le moment.",
       "renameError": "Impossible de renommer cet enregistrement pour le moment.",
+      "shareError": "Impossible de partager cet enregistrement pour le moment.",
       "retryError": "Impossible de relancer la génération pour le moment.",
       "retrySuccess": "Génération relancée",
       "retryModal": {
         "title": "Régénérer la transcription",
+        "titleChangeLanguage": "Changer la langue",
         "description": "Choisissez la langue pour la nouvelle génération.",
+        "descriptionChangeLanguage": "Choisissez la langue pour cette nouvelle transcription.",
+        "extra": "Le traitement prendra quelques minutes et remplacera le transcript actuel.",
+        "changeLanguageMainAction": "Transcrire",
+        "retryMainAction": "Relancer",
         "languageLabel": "Langue",
         "languageOptions": {
           "en": "Anglais",
@@ -139,7 +216,19 @@
         }
       }
     },
-    "openInDocs": "Ouvrir dans Docs"
+    "openInDocs": "Ouvrir dans Docs",
+    "createInDocsError": "Impossible de créer le document Docs pour le moment. Veuillez réessayer.",
+    "openInDocsError": "Impossible d'ouvrir le document Docs pour le moment. Veuillez réessayer.",
+    "failures": {
+      "tooLong": "Ce média est trop long pour être transcrit.",
+      "tooLongDescription": "La durée maximale est de {{duration}}. Raccourcissez le média puis importez-le à nouveau.",
+      "quota": "Quota de transcription audio atteint.",
+      "quotaRetryTitle": "Transcription non relancée : quota atteint",
+      "quotaDescription": "Le service autorise votre compte à soumettre jusqu’à {{hours}} heures d’audio sur une période glissante de 24 heures, nouvelles tentatives comprises. Réessayez plus tard, lorsque du quota sera de nouveau disponible.",
+      "quotaWithoutLimit": "Le quota de transcription audio fixé par le service pour votre compte est atteint. Réessayez plus tard, lorsque du quota sera de nouveau disponible.",
+      "faq": "Consulter la FAQ",
+      "tooLongFaqUrl": "https://docs.numerique.gouv.fr/docs/95fcf4c6-09bf-43ec-bb78-5fd9de6be712/#1bcb3602-6b40-433b-a23f-c9cde224f5ce"
+    }
   },
   "transcript": {
     "speaker": "Participant",
@@ -192,17 +281,30 @@
       "formatDateTime": "{{value, formatDateTime}}",
       "formatDateTimeStatic": "{{value, formatDateTimeStatic}}",
       "duration": "{{duration, formatDuration}}",
+      "durationLong": "{{duration, formatDurationLong}}",
       "durationMinsSeconds": "{{mins}} min {{secs}}",
+      "durationHoursMinutes": "{{hours}}h {{mins}} min",
+      "durationHours": "{{hours}}h ",
       "durationMins": "{{mins}} min",
       "durationSeconds": "{{secs}} sec",
       "fileSizeMb": "{{size, number(maximumFractionDigits: 2)}} Mo"
     },
     "dates": {
+      "tomorrow": "Demain",
       "today": "Aujourd'hui",
       "yesterday": "Hier",
       "todayAt": "Aujourd'hui à",
       "yesterdayAt": "Hier à",
       "at": "à"
     }
+  },
+  "rateLimits": {
+    "title": "Trop de requêtes. Veuillez patienter.",
+    "tryLater": "Veuillez réessayer plus tard.",
+    "retryAt": "Vous pourrez réessayer après {{time}}.",
+    "uploadsPaused": "Vos enregistrements restent sur cet appareil et seront envoyés plus tard.",
+    "resumeUploads": "Reprendre les envois",
+    "retry": "Réessayer",
+    "uploadsPausedShort": "Envois en pause"
   }
 }

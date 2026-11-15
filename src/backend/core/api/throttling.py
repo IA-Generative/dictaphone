@@ -1,26 +1,63 @@
 """Throttling modules for the API."""
 
-from lasuite.drf.throttling import MonitoredThrottleMixin
-from rest_framework.throttling import AnonRateThrottle
-from sentry_sdk import capture_message
+from rest_framework.throttling import UserRateThrottle
 
 
-def sentry_monitoring_throttle_failure(message):
-    """Log when a failure occurs to detect rate limiting issues."""
-    capture_message(message, "warning")
+class FileCreateThrottleBurst(UserRateThrottle):
+    """Limit file creation bursts per user."""
+
+    scope = "file_create_burst"
 
 
-class MonitoredAnonRateThrottle(MonitoredThrottleMixin, AnonRateThrottle):
-    """Throttle for the monitored scoped rate throttle."""
+class FileCreateThrottleSustained(UserRateThrottle):
+    """Limit sustained file creation per user."""
+
+    scope = "file_create_sustained"
 
 
-class RequestEntryAnonRateThrottle(MonitoredAnonRateThrottle):
-    """Throttle Anonymous user requesting room entry"""
+class FileUploadEndedThrottleBurst(UserRateThrottle):
+    """Limit upload finalization bursts per user."""
 
-    scope = "request_entry"
+    scope = "file_upload_ended_burst"
 
 
-class CreationCallbackAnonRateThrottle(MonitoredAnonRateThrottle):
-    """Throttle Anonymous user requesting room generation callback"""
+class FileUploadEndedThrottleSustained(UserRateThrottle):
+    """Limit sustained upload finalization per user."""
 
-    scope = "creation_callback"
+    scope = "file_upload_ended_sustained"
+
+
+class AiJobRetryThrottleBurst(UserRateThrottle):
+    """Limit transcription retry bursts per user."""
+
+    scope = "ai_job_retry_burst"
+
+
+class AiJobRetryThrottleSustained(UserRateThrottle):
+    """Limit sustained transcription retries per user."""
+
+    scope = "ai_job_retry_sustained"
+
+
+class AiJobCreateInDocsThrottleBurst(UserRateThrottle):
+    """Limit Docs creation bursts per user."""
+
+    scope = "ai_job_create_in_docs_burst"
+
+
+class AiJobCreateInDocsThrottleSustained(UserRateThrottle):
+    """Limit sustained Docs creation per user."""
+
+    scope = "ai_job_create_in_docs_sustained"
+
+
+class AiJobResultThrottleBurst(UserRateThrottle):
+    """Share a result download burst allowance per user."""
+
+    scope = "ai_job_result_burst"
+
+
+class AiJobResultThrottleSustained(UserRateThrottle):
+    """Share a sustained result download allowance per user."""
+
+    scope = "ai_job_result_sustained"

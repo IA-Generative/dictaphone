@@ -10,13 +10,34 @@
     "formatDate": "{{value, formatDate}}",
     "formatDateTime": "{{value, formatDateTime}}",
     "formatDateTimeStatic": "{{value, formatDateTimeStatic}}",
-    "duration": "{{duration, formatDuration}}"
+    "duration": "{{duration, formatDuration}}",
+    "durationLong": "{{duration, formatDurationLong}}"
   },
   "dates": {
+    "tomorrow": "Demain",
     "today": "Aujourd'hui",
     "yesterday": "Hier",
     "todayAt": "Aujourd'hui à",
     "yesterdayAt": "Hier à",
     "at": "à"
+  },
+  "rateLimit": {
+    "title": "Limite de requêtes du serveur atteinte",
+    "waitUntil": "Vous pourrez réessayer après {{time}}.",
+    "tryLater": "Veuillez réessayer plus tard.",
+    "ready": "Vous pouvez réessayer maintenant.",
+    "retry": "Réessayer",
+    "scopes": {
+      "upload": "La limite de requêtes du serveur est atteinte. Les imports sont temporairement suspendus.",
+      "transcriptionRetry": "La limite de requêtes du serveur est atteinte. Les nouvelles tentatives de transcription sont temporairement suspendues.",
+      "docsCreate": "La limite de requêtes du serveur est atteinte. La création de documents est temporairement suspendue.",
+      "aiResult": "La limite de requêtes du serveur est atteinte. Le chargement des transcriptions et des synthèses est temporairement suspendu."
+    }
+  },
+  "restricted": {
+    "title": "Accès non autorisé",
+    "defaultMessage": "Votre compte n’est pas autorisé à utiliser Transcripts.",
+    "home": "Accueil",
+    "documentation": "En savoir plus sur les conditions d’accès (nouvel onglet)"
   }
 }

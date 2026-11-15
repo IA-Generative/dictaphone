@@ -1,4 +1,5 @@
 import './src/i18n/index'
+import { RateLimitNotifications } from '@/components/RateLimitNotice'
 import React from 'react'
 import { StatusBar } from 'react-native'
 import { NavigationContainer } from '@react-navigation/native'
@@ -21,6 +22,9 @@ import { UpdateModal } from '@/features/config/UpdateModal'
 import { useSharedAudioListener } from '@/features/share/useSharedAudioListener'
 import { useFileStatusSocket } from '@/features/pipeline/useFileStatusSocket'
 import { useDeviceHeartbeat } from '@/features/device/useDeviceHeartbeat'
+import { RecoverModal } from '@/features/config/RecoverModal'
+import { CheckBatteryOptimization } from '@/components/CheckBatteryOptimization'
+import { runRecovery, startRecordingsUploadManager } from '@/services/storage'
 
 const RootStack = createNativeStackNavigator<RootStackParamList>()
 
@@ -32,10 +36,14 @@ function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>
         <AppInitialization>
+          <RateLimitNotifications />
+          <CheckBatteryOptimization />
           <StatusBar barStyle="dark-content" />
           <NavigationContainer
             onReady={() => {
               BootSplash.hide()
+              void runRecovery()
+              startRecordingsUploadManager()
             }}
             fallback={<></>}
             onStateChange={(state) => {
@@ -45,13 +53,18 @@ function App() {
               }
             }}
           >
-            <RootStack.Navigator screenOptions={{ headerShown: false }}>
+            <RootStack.Navigator
+              screenOptions={{
+                headerShown: false,
+                headerTintColor: '#000000',
+                headerStyle: {
+                  backgroundColor: '#ffffff',
+                },
+              }}
+            >
               <RootStack.Screen name="Login" component={LoginScreen} />
               <RootStack.Screen name="QrScan" component={QrScanScreen} />
-              <RootStack.Screen
-                name="CodeEntry"
-                component={CodeEntryScreen}
-              />
+              <RootStack.Screen name="CodeEntry" component={CodeEntryScreen} />
               <RootStack.Screen name="Main" component={RecordingsScreen} />
               <RootStack.Screen name="Info" component={InfoScreen} />
               <RootStack.Screen
@@ -66,6 +79,7 @@ function App() {
             </RootStack.Navigator>
           </NavigationContainer>
           <UpdateModal />
+          <RecoverModal />
         </AppInitialization>
       </QueryClientProvider>
     </GestureHandlerRootView>

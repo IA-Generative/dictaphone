@@ -1,0 +1,429 @@
+"""Tests for domain-specific configuration resolution."""
+
+from unittest.mock import patch
+
+import pytest
+from pydantic import ValidationError
+
+from core.configuration import (
+    BucketConfiguration,
+    BucketConfigurations,
+    DataPolicyConfiguration,
+    DataPolicyConfigurations,
+    clear_configuration_cache,
+    get_email_domain,
+    get_profile_for_email,
+    get_profiles,
+    normalize_email_domain,
+    resolve_bucket_configurations,
+    resolve_profiles,
+    resolve_runtime_configuration,
+)
+
+
+def _profiles():
+    return {
+        "default": {"default": True, "bucket": "default"},
+        "alpha": {
+            "domains": ["Example.COM."],
+            "bucket": "alpha",
+            "file_auto_hard_delete_after_days": 10,
+        },
+    }
+
+
+def test_email_domains_use_simple_case_insensitive_matching():
+    """Email addresses and configured domains use the same normalization rules."""
+    assert normalize_email_domain(" Exämple.COM. ") == "exämple.com"
+    assert get_email_domain("user@Exämple.COM") == "exämple.com"
+    assert get_email_domain("not-an-email") is None
+
+
+@pytest.mark.parametrize(
+    "domain", ["Korp.test", "Éxample.com", "ſervice.test", "ıdent.test"]
+)
+def test_domain_policy_preserves_unicode(settings, domain):
+    """Unicode casing must not route an address to another domain's data policy."""
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "ascii": {
+            "domains": ["korp.test", "éxample.com", "service.test", "ident.test"]
+        },
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    assert normalize_email_domain(f" {domain}. ") == domain
+    assert get_email_domain(f"USER@{domain}") == domain
+    assert get_profile_for_email(f"USER@{domain}").name == "default"
+
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "unicode": {"domains": [f" {domain}. "]},
+    }
+    clear_configuration_cache()
+    assert get_profile_for_email(f"USER@{domain}").name == "unicode"
+
+
+@pytest.mark.parametrize(
+    "email",
+    [None, "", "not-an-email", "@example.com", "user@", "user@@example.com"],
+)
+def test_email_domain_requires_a_single_at_and_nonempty_parts(email):
+    """Malformed addresses must not select a domain policy."""
+    assert get_email_domain(email) is None
+
+
+def test_email_addresses_default_to_an_empty_tuple_and_are_normalized():
+    """Explicit email selectors should be stored as normalized tuples."""
+    assert DataPolicyConfiguration.model_validate({}).emails == ()
+    assert DataPolicyConfiguration.model_validate(
+        {"emails": [" User@EXAMPLE.COM "]}
+    ).emails == ("user@example.com",)
+
+
+def _buckets():
+    return {
+        "default": {
+            "bucket_name_env": "S3_DEFAULT_BUCKET_NAME",
+            "access_key_id_env": "S3_DEFAULT_ACCESS_KEY_ID",
+            "secret_access_key_env": "S3_DEFAULT_SECRET_ACCESS_KEY",
+        },
+        "alpha": {
+            "bucket_name_env": "S3_ALPHA_BUCKET_NAME",
+            "access_key_id_env": "S3_ALPHA_ACCESS_KEY_ID",
+            "secret_access_key_env": "S3_ALPHA_SECRET_ACCESS_KEY",
+        },
+    }
+
+
+def test_profiles_are_normalized_and_resolved(settings):
+    """Profiles should normalize domains and inherit global values."""
+    settings.DATA_POLICY_CONFIGURATIONS = _profiles()
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    profile = get_profile_for_email("user@example.com")
+
+    assert profile.name == "alpha"
+    assert profile.domains == ("example.com",)
+    assert profile.bucket == "alpha"
+    assert profile.storage_bucket_name == "dictaphone-media-alpha"
+    assert profile.file_auto_hard_delete_after_days == 10
+    assert profile.auto_create_in_docs is True
+    assert profile.send_notification_email is False
+    assert profile.original_file_data_delete_after_days == (
+        settings.ORIGINAL_FILE_DATA_DELETE_AFTER_DAYS
+    )
+
+
+@pytest.mark.parametrize(
+    "email", ["user@example.com", "USER@EXAMPLE.COM", " User@Example.COM "]
+)
+def test_explicit_email_match_takes_precedence_over_domain_match(settings, email):
+    """An explicit email selector should override its domain's policy."""
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "alpha": {"domains": ["example.com"]},
+        "beta": {
+            "domains": ["other.example"],
+            "emails": ["user@EXAMPLE.COM"],
+        },
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    profile = get_profile_for_email(email)
+
+    assert profile.name == "beta"
+    assert profile.emails == ("user@example.com",)
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "ｅxample.com",  # Fullwidth e is not mapped to ASCII.
+        "еxample.com",  # Cyrillic e is distinct from Latin e.
+        "exam\u200bple.com",  # Invisible characters are not removed.
+        "xn--exmple-cua.com",  # Punycode is not decoded to exämple.com.
+        "exa\u0308mple.com",  # Decomposed Unicode is not composed.
+    ],
+)
+@pytest.mark.parametrize("selector", ["domains", "emails"])
+def test_policy_matching_keeps_unicode_domains_distinct(settings, domain, selector):
+    """Policy keys must not merge lookalikes or alternate domain encodings."""
+    configured_domains = ["example.com", "exämple.com"]
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "alpha": {
+            selector: configured_domains
+            if selector == "domains"
+            else [f"user@{value}" for value in configured_domains]
+        },
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    assert get_profile_for_email(f"user@{domain}").name == "default"
+
+    # Configured Unicode domains still match themselves.
+    assert get_profile_for_email("user@exämple.com").name == "alpha"
+
+
+def test_data_policy_can_be_configured_with_emails_only(settings):
+    """A non-default policy may target explicit emails without declaring domains."""
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "email_only": {"emails": ["user@example.com"]},
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    profile = get_profile_for_email("user@example.com")
+
+    assert profile.name == "email_only"
+    assert profile.domains == ()
+    assert profile.emails == ("user@example.com",)
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        "dısk@example.com",
+        "diſk@example.com",
+        "disK@example.com",
+        "Élise@example.com",
+        "disk@Korp.test",
+    ],
+)
+def test_explicit_email_policy_preserves_unicode(settings, email):
+    """Explicit selectors keep Unicode intact in both configuration and lookup."""
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {"default": True},
+        "ascii": {
+            "emails": ["disk@example.com", "élise@example.com", "disk@korp.test"]
+        },
+        "unicode": {"emails": [email]},
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+    assert get_profile_for_email(email).name == "unicode"
+    assert get_profile_for_email(email).emails == (email,)
+    assert get_profile_for_email("DISK@example.com").name == "ascii"
+
+
+def test_data_policy_notification_and_docs_options_are_configurable(settings):
+    """Data policy options should be resolved with their documented defaults."""
+    settings.DATA_POLICY_CONFIGURATIONS = {
+        "default": {
+            "default": True,
+            "auto_create_in_docs": False,
+            "send_notification_email": True,
+        }
+    }
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    profile = get_profile_for_email("user@example.com")
+
+    assert profile.auto_create_in_docs is False
+    assert profile.send_notification_email is True
+
+
+def test_runtime_configuration_is_resolved_once(settings):
+    """Repeated lookups reuse the resolved configuration registry."""
+    settings.DATA_POLICY_CONFIGURATIONS = _profiles()
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    with patch(
+        "core.configuration.resolve_runtime_configuration",
+        wraps=resolve_runtime_configuration,
+    ) as resolve_runtime:
+        get_profiles()
+        get_profile_for_email("user@example.com")
+
+    assert resolve_runtime.call_count == 1
+
+
+@pytest.mark.parametrize("email", [None, "user@unknown.example", "not-an-email"])
+def test_profile_resolution_uses_default(settings, email):
+    """Unknown or missing emails should use the default profile."""
+    settings.DATA_POLICY_CONFIGURATIONS = _profiles()
+    settings.S3_BUCKET_CONFIGURATIONS = _buckets()
+
+    assert get_profile_for_email(email).name == "default"
+
+
+def test_duplicate_domains_are_rejected():
+    """A domain cannot belong to more than one profile."""
+    with pytest.raises(ValidationError, match="multiple data policies"):
+        DataPolicyConfigurations.model_validate(
+            {
+                "default": {"default": True},
+                "alpha": {"domains": ["example.com"]},
+                "beta": {"domains": ["EXAMPLE.COM"]},
+            }
+        )
+
+
+def test_duplicate_explicit_emails_are_rejected_across_profiles():
+    """An explicit email cannot be assigned to multiple data policies."""
+    with pytest.raises(ValidationError, match="multiple data policies"):
+        DataPolicyConfigurations.model_validate(
+            {
+                "default": {"default": True},
+                "alpha": {
+                    "domains": ["alpha.example"],
+                    "emails": ["user@example.com"],
+                },
+                "beta": {
+                    "domains": ["beta.example"],
+                    "emails": ["USER@EXAMPLE.COM"],
+                },
+            }
+        )
+
+
+def test_duplicate_explicit_emails_are_rejected_within_a_profile():
+    """A profile cannot list an explicit email more than once."""
+    with pytest.raises(ValidationError, match="duplicate email addresses"):
+        DataPolicyConfigurations.model_validate(
+            {
+                "default": {"default": True},
+                "alpha": {
+                    "domains": ["alpha.example"],
+                    "emails": ["user@example.com", "USER@EXAMPLE.COM"],
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "email", ["not-an-email", "@example.com", "user@", "user@@example.com"]
+)
+def test_invalid_explicit_email_is_rejected(email):
+    """Configured email selectors require a single @ and nonempty parts."""
+    with pytest.raises(ValidationError, match="Invalid email address"):
+        DataPolicyConfigurations.model_validate(
+            {
+                "default": {"default": True},
+                "alpha": {
+                    "domains": ["alpha.example"],
+                    "emails": [email],
+                },
+            }
+        )
+
+
+def test_missing_default_profile_is_rejected():
+    """Configured profiles must include a default profile."""
+    with pytest.raises(ValidationError, match="Exactly one data policy"):
+        DataPolicyConfigurations.model_validate({"alpha": {"domains": ["example.com"]}})
+
+
+def test_default_profile_cannot_match_a_domain():
+    """The default profile is the fallback and cannot declare domains."""
+    with pytest.raises(ValidationError, match="default data policy"):
+        DataPolicyConfigurations.model_validate(
+            {"default": {"default": True, "domains": ["example.com"]}}
+        )
+
+
+def test_policy_bucket_reference_must_be_configured(settings):
+    """Every policy bucket reference must point to a configured bucket."""
+    with pytest.raises(ValueError, match="unknown bucket"):
+        resolve_profiles(
+            {"default": {"default": True, "bucket": "missing"}},
+            settings,
+            {},
+        )
+
+
+def test_bucket_configuration_requires_default():
+    """Bucket configurations must include the default bucket."""
+    with pytest.raises(ValidationError, match="default bucket"):
+        BucketConfigurations.model_validate(
+            {
+                "alpha": {
+                    "bucket_name_env": "S3_ALPHA_BUCKET_NAME",
+                    "access_key_id_env": "S3_ALPHA_ACCESS_KEY_ID",
+                    "secret_access_key_env": "S3_ALPHA_SECRET_ACCESS_KEY",
+                }
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("bucket_overrides", "expected_upload_acl"),
+    [
+        ({}, "private"),
+        ({"upload_acl": "public-read"}, "public-read"),
+        ({"upload_acl": None}, None),
+    ],
+)
+def test_bucket_configuration_upload_acl_defaults_and_accepts_custom_values(
+    bucket_overrides, expected_upload_acl
+):
+    """Bucket upload ACLs should use the private default and accept overrides."""
+    bucket = {
+        "bucket_name_env": "S3_DEFAULT_BUCKET_NAME",
+        "access_key_id_env": "S3_DEFAULT_ACCESS_KEY_ID",
+        "secret_access_key_env": "S3_DEFAULT_SECRET_ACCESS_KEY",
+    }
+    bucket.update(bucket_overrides)
+
+    assert BucketConfiguration.model_validate(bucket).upload_acl == expected_upload_acl
+
+
+def test_bucket_configuration_upload_acl_is_resolved(monkeypatch):
+    """Resolved bucket configurations should retain the configured upload ACL."""
+    monkeypatch.setenv("S3_DEFAULT_BUCKET_NAME", "default-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "access-key")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "secret-key")
+
+    buckets = resolve_bucket_configurations(
+        {
+            "default": {
+                "bucket_name_env": "S3_DEFAULT_BUCKET_NAME",
+                "access_key_id_env": "S3_ACCESS_KEY_ID",
+                "secret_access_key_env": "S3_SECRET_ACCESS_KEY",
+                "upload_acl": None,
+            }
+        }
+    )
+
+    assert buckets["default"].upload_acl is None
+
+
+def test_bucket_configuration_requires_unique_physical_bucket_names():
+    """Logical bucket configurations cannot share a physical bucket name."""
+    with pytest.raises(ValueError, match="bucket names must be unique"):
+        resolve_bucket_configurations(
+            {
+                "default": {
+                    "bucket_name_env": "S3_DEFAULT_BUCKET_NAME",
+                    "access_key_id_env": "S3_DEFAULT_ACCESS_KEY_ID",
+                    "secret_access_key_env": "S3_DEFAULT_SECRET_ACCESS_KEY",
+                },
+                "alpha": {
+                    "bucket_name_env": "S3_DEFAULT_BUCKET_NAME",
+                    "access_key_id_env": "S3_ALPHA_ACCESS_KEY_ID",
+                    "secret_access_key_env": "S3_ALPHA_SECRET_ACCESS_KEY",
+                },
+            }
+        )
+
+
+def test_bucket_name_and_endpoint_url_are_resolved_from_environment(monkeypatch):
+    """Bucket names and endpoint URLs should resolve from configured env vars."""
+    monkeypatch.setenv("S3_BUCKET_NAME", "default-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY_ID", "access-key")
+    monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "secret-key")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "http://rustfs:9000")
+
+    buckets = resolve_bucket_configurations(
+        {
+            "default": {
+                "bucket_name_env": "S3_BUCKET_NAME",
+                "access_key_id_env": "S3_ACCESS_KEY_ID",
+                "secret_access_key_env": "S3_SECRET_ACCESS_KEY",
+                "endpoint_url_env": "S3_ENDPOINT_URL",
+            }
+        }
+    )
+
+    assert buckets["default"].storage_bucket_name == "default-bucket"
+    assert buckets["default"].endpoint_url == "http://rustfs:9000"

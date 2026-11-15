@@ -1,8 +1,11 @@
 # ---- Front-end image ----
-FROM node:22-alpine AS frontend-deps
+# Browser assets are architecture-independent. Build them natively to avoid
+# running Node, TypeScript, Vite and PostHog under QEMU for ARM64 images.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-deps
 
 WORKDIR /home/frontend/
 
+COPY ./src/frontend/.npmrc ./.npmrc
 COPY ./src/frontend/package.json ./package.json
 COPY ./src/frontend/package-lock.json ./package-lock.json
 
@@ -27,7 +30,7 @@ RUN set -e && \
     npx @posthog/cli@0.4.8 sourcemap inject --directory ./dist/assets
 
 # ---- Front-end image ----
-FROM nginxinc/nginx-unprivileged:alpine3.23 AS frontend-production
+FROM nginx/nginx-unprivileged:alpine3.24 AS frontend-production
 
 USER root
 RUN apk update && apk upgrade libssl3 \
@@ -35,7 +38,8 @@ RUN apk update && apk upgrade libssl3 \
     libxml2>=2.12.7-r2 \
     libxslt>=1.1.39-r2 \
     libexpat>=2.7.2-r0 \
-    libpng>=1.6.53-r0
+    libpng>=1.6.53-r0 \
+    && apk del curl
 
 USER nginx
 

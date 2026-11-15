@@ -114,22 +114,6 @@ Requires array with top level scope and component name
 app.kubernetes.io/component: {{ $component }}
 {{- end }}
 
-{{- define "dictaphone.probes.abstract" -}}
-{{- if .exec -}}
-exec:
-{{- toYaml .exec | nindent 2 }}
-{{- else if .tcpSocket -}}
-tcpSocket:
-{{- toYaml .tcpSocket | nindent 2 }}
-{{- else -}}
-httpGet:
-  path: {{ .path }}
-  port: {{ .targetPort }}
-{{- end }}
-initialDelaySeconds: {{ .initialDelaySeconds | eq nil | ternary 0 .initialDelaySeconds }}
-timeoutSeconds: {{ .timeoutSeconds | eq nil | ternary 1 .timeoutSeconds }}
-{{- end }}
-
 {{/*
 Full name for the backend
 
@@ -168,14 +152,39 @@ Requires top level scope
 {{- end }}
 
 {{/*
-Usage : {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" .Values.path.to.the.image1) }}
+Full name for the audio extraction worker
+
+Requires top level scope
+*/}}
+{{- define "dictaphone.audioExtractor.fullname" -}}
+{{ include "dictaphone.fullname" . }}-audio-extractor
+{{- end }}
+
+{{/*
+Full name for a media files service or ingress.
+
+Requires a dict with the top-level fullname and the media files entry name.
+The default entry keeps the names used before media files became configurable
+as a list, while additional entries get a stable name-specific suffix.
+*/}}
+{{- define "dictaphone.mediaFiles.fullname" -}}
+{{- $name := required "a name is required for every media files entry" .name | lower | replace "_" "-" -}}
+{{- if eq $name "default" -}}
+{{- printf "%s-media-files" .fullname | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-media-files-%s" .fullname $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Usage : {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" .Values.images.credentials) }}
 */}}
 {{- define "dictaphone.secret.dockerconfigjson.name" }}
 {{- if (default (dict) .imageCredentials).name }}{{ .imageCredentials.name }}{{ else }}{{ .fullname | trunc 63 | trimSuffix "-" }}-dockerconfig{{ end -}}
 {{- end }}
 
 {{/*
-Usage : {{ include "dictaphone.secret.dockerconfigjson" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" .Values.path.to.the.image1) }}
+Usage : {{ include "dictaphone.secret.dockerconfigjson" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" .Values.images.credentials) }}
 */}}
 {{- define "dictaphone.secret.dockerconfigjson" }}
 {{- if .imageCredentials -}}
@@ -192,3 +201,7 @@ data:
   .dockerconfigjson: {{ template "dictaphone.secret.dockerconfigjson.data" .imageCredentials }}
 {{- end -}}
 {{- end }}
+
+{{- define "dictaphone.s3Gateway.fullname" -}}
+{{- printf "%s-s3-gateway" (include "dictaphone.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}

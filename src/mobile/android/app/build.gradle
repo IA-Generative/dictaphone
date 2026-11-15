@@ -82,8 +82,8 @@ android {
         applicationId "fr.gouv.assistant_transcripts"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.1.0"
+        versionCode 28
+        versionName "1.7.0"
         manifestPlaceholders = [
             appAuthRedirectScheme: "fr-gouv-assistant-transcripts"
         ]
@@ -121,6 +121,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation("androidx.work:work-runtime:2.11.2")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

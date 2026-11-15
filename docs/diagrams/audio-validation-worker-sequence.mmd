@@ -1,0 +1,52 @@
+sequenceDiagram
+    autonumber
+    participant Worker@{ "type": "control" } as HTTP validation supervisor
+    participant Child@{ "type": "control" } as Fresh attempt process
+    participant Validators@{ "type": "entity" } as opusinfo + opusdec<br/>inside the attempt process
+    participant API@{ "type": "control" } as Dictaphone API
+    participant Gateway@{ "type": "control" } as S3 egress gateway
+    participant FileStore@{ "type": "database" } as File-linked object storage
+
+    Note over Child,FileStore: Gateway path shown: enabled by default in Helm, Compose, and Tilt.<br/>If S3_GATEWAY_URL is empty, the child transfers directly to storage.<br/>Gateway rejects disallowed requests before contacting storage.
+    Note over Child,API: Transient download and completion errors retry within the attempt budget.
+
+    Worker->>Worker: Clean work_dir and initialize health endpoints
+    loop Before 15-minute claim cutoff and no termination requested
+        Worker->>API: GET /api/internal/v1.0/audio-jobs/validation/next<br/>Authorization: Bearer worker token
+        alt No job available
+            API-->>Worker: 204 No Content
+            Worker->>Worker: Wait 5 seconds, keeping supervisor heartbeat fresh
+        else API failure or invalid response
+            API-->>Worker: Error
+            Worker->>Worker: Fail readiness, remain live,<br/>retry with exponential backoff and jitter
+        else Validation job available
+            API-->>Worker: Job id, job_kind, expires_at,<br/>signed source_url
+            Worker->>Child: Spawn a fresh process, pass settings and job over stdin
+            Note over Worker,Child: Whole-attempt budget is bounded by the configured job timeout<br/>and server lease, reserve up to 5 seconds for failure reporting.
+            Child->>Child: Create temporary job directory under work_dir
+            Child->>Gateway: GET /proxy<br/>X-Target-URL: source_url
+            Gateway->>Gateway: Validate target and headers against allowlist
+            Gateway->>FileStore: GET original signed source_url, no redirects
+            FileStore-->>Gateway: Source object
+            Gateway-->>Child: Stream source object
+            Child->>Validators: Run opusinfo, then<br/>opusdec --quiet source /dev/null
+            alt Download or validation fails
+                Child->>API: POST /api/internal/v1.0/audio-jobs/validation/complete<br/>Bearer token, id, status=failure, error, metadata
+            else Validation succeeds
+                Validators-->>Child: Audio stream validated
+                Child->>API: POST /api/internal/v1.0/audio-jobs/validation/complete<br/>Bearer token, id, status=success, metadata
+            end
+            alt Child exits successfully after reporting completion
+                Child-->>Worker: Exit 0
+            else Child crashes or exceeds its processing budget
+                Worker->>Child: Kill the entire attempt process group and reap the child
+                Worker->>API: Fresh reporting child attempts failure completion<br/>POST /api/internal/v1.0/audio-jobs/validation/complete within remaining lease
+                Note over Worker,API: If completion cannot be reported, the backend recovers<br/>the attempt when its lease expires.
+            end
+            Worker->>Worker: Remove remaining descendants and clean work_dir
+        end
+    end
+    Worker->>Worker: Clean workspace and exit 0 after normal drain
+
+    Note over Worker,Child: At minute 15, readiness fails and new claims stop,<br/>an already claimed attempt finishes before normal exit.
+    Note over Worker,Child: SIGTERM cancels the active attempt rather than draining it.<br/>The independent watchdog sends TERM at minute 20 and KILL 30 seconds later.

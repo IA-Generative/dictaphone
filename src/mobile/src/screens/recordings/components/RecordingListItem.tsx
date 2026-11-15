@@ -1,3 +1,9 @@
+import {
+  canRetryAiJob,
+  getFailureMessageKey,
+} from '@/features/ai-jobs/utils/failurePresentation'
+import { useCooldown } from '@/api/useCooldown'
+import { isRateLimitError } from '@/api/rateLimits'
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -39,12 +45,25 @@ import { AppText } from '@/components/AppText'
 import { colors } from '@/components/colors'
 import { useTranslation } from 'react-i18next'
 import { RetryTranscriptModal } from '@/components/RetryTranscriptModal'
+import { showRetryTranscriptResult } from '@/components/showRetryTranscriptResult'
 import { TRANSCRIPTION_LANGUAGES } from '@/features/ai-jobs/constants'
 import { pipelineStatusLabel } from '@/features/pipeline/statusLabels'
+import {
+  deleteBlockedRecording,
+  retryRecordingUpload,
+} from '@/services/storage'
+import { shareLocalRecording } from '@/utils/shareLocalRecording'
+import useFormattedProcessingDuration from '@/features/ai-jobs/utils/useFormattedProcessingDuration'
 
 const OPEN_STATE_THRESHOLD = 60
 const DELETE_ACTION_WIDTH = 80
 const RETRY_ACTION_WIDTH = 60
+
+const audioExtractionMetaTranslationKeys = {
+  pending_audio_extraction: 'recordings.meta.pendingAudioExtraction',
+  extracting_audio: 'recordings.meta.extractingAudio',
+  audio_extraction_failed: 'recordings.meta.audioExtractionFailed',
+} as const
 
 export type SwipeableRowRef = React.ElementRef<typeof Swipeable>
 
@@ -54,17 +73,15 @@ type StatusIndicatorProps = {
 }
 
 export type UploadBlockReason =
-  | 'not-logged-in'
-  | 'ok'
-  | 'offline'
-  | 'wifiOnly'
-  | 'other'
+  'not-logged-in' | 'ok' | 'offline' | 'wifiOnly' | 'other' | 'rateLimited'
 
 function StatusIndicator({ item, uploadBlockReason }: StatusIndicatorProps) {
   if (item.kind === 'fake') {
     return <FileDisabledIcon />
   }
   if (item.kind === 'local') {
+    if (uploadBlockReason === 'rateLimited') return <PauseIcon />
+    if (item.uploadingStatus === 'blocked') return <WarningIcon />
     if (uploadBlockReason === 'not-logged-in') {
       return <Lucide name="user-round-x" size={16} />
     }
@@ -85,6 +102,17 @@ function StatusIndicator({ item, uploadBlockReason }: StatusIndicatorProps) {
     return <WarningIcon />
   }
 
+  if (item.audio_extraction_state === 'audio_extraction_failed') {
+    return <WarningIcon />
+  }
+  if (
+    item.ai_jobs.length === 0 &&
+    item.audio_extraction_state &&
+    item.audio_extraction_state !== 'extraction_done'
+  ) {
+    return <ActivityIndicator size="small" />
+  }
+
   const { lastAiJobTranscript } = getMainAiJobs(item.ai_jobs)
   if (lastAiJobTranscript?.status === 'failed') {
     return <WarningIcon />
@@ -98,7 +126,8 @@ function StatusIndicator({ item, uploadBlockReason }: StatusIndicatorProps) {
 function formatRecordMeta(
   recording: LocalOrRemoteRecording,
   t: TFunction,
-  uploadBlockReason: UploadBlockReason
+  uploadBlockReason: UploadBlockReason,
+  formattedProcessingDuration: string | null
 ): string {
   if (recording.kind === 'fake') {
     return ''
@@ -115,6 +144,18 @@ function formatRecordMeta(
   })
 
   if (recording.kind === 'local') {
+    if (uploadBlockReason === 'rateLimited')
+      return `${durationLabel} • ${t('rateLimits.uploadsPausedShort')}`
+    if (recording.uploadingStatus === 'blocked') {
+      // Prefer the server's reason (e.g. an expired upload token to renew in
+      // the admin) over the generic label so the failure is actionable.
+      const reason =
+        recording.serverStatusMessage ??
+        t(
+          `recordings.meta.uploadBlocked.${recording.uploadBlockedReason ?? 'transient'}`
+        )
+      return `${durationLabel} • ${reason}`
+    }
     if (uploadBlockReason === 'wifiOnly') {
       return `${durationLabel} • ${t('recordings.wifiOnlySync')}`
     }
@@ -134,25 +175,36 @@ function formatRecordMeta(
     if (recording.uploadingStatus === 'uploaded' && recording.serverStatus) {
       return `${durationLabel} • ${pipelineStatusLabel(recording.serverStatus, t)}`
     }
-    if (recording.uploadingStatus === 'failed') {
-      // Prefer the server's reason (e.g. expired upload token to renew in the
-      // admin) over the generic label so the failure is actionable.
-      const reason =
-        recording.serverStatusMessage ?? t('recordings.meta.waitingForUpload')
-      return `${durationLabel} • ${reason}`
-    }
     if (recording.uploadingStatus === 'to_upload') {
       return `${durationLabel} • ${t('recordings.meta.waitingForUpload')}`
     }
     return `${durationLabel} • ${dateLabel}`
   }
 
+  if (
+    recording.ai_jobs.length === 0 &&
+    recording.audio_extraction_state &&
+    recording.audio_extraction_state !== 'extraction_done'
+  ) {
+    if (recording.audio_extraction_state === 'audio_extraction_failed') {
+      return t(audioExtractionMetaTranslationKeys.audio_extraction_failed)
+    }
+
+    return `${durationLabel} • ${t(
+      audioExtractionMetaTranslationKeys[recording.audio_extraction_state]
+    )}`
+  }
+
   const { lastAiJobTranscript } = getMainAiJobs(recording.ai_jobs)
   if (lastAiJobTranscript?.status === 'failed') {
-    return `${durationLabel} • ${dateLabel} • ${t('recordings.meta.processingFailed')}`
+    return `${durationLabel} • ${dateLabel} • ${t(getFailureMessageKey(lastAiJobTranscript)!)}`
   }
   if (lastAiJobTranscript?.status === 'success') {
     return `${durationLabel} • ${dateLabel}`
+  }
+
+  if (formattedProcessingDuration) {
+    return `${durationLabel} • ${t('recordings.meta.processingLong', { value: formattedProcessingDuration })}`
   }
   return `${durationLabel} • ${dateLabel} • ${t('recordings.meta.processing')}`
 }
@@ -411,10 +463,12 @@ export function RecordingListItem({
   onWillOpenRow,
   onCloseRow,
 }: RecordingListItemProps) {
+  const retryBlocked = useCooldown('transcriptionRetry').isBlocked
   const retryWithLanguageMutation = useRetryWithLanguageMutation()
   const [isRetryModalVisible, setIsRetryModalVisible] = useState(false)
   const [retryLanguage, setRetryLanguage] =
     useState<TTranscriptionLanguage | null>(null)
+  const [isSharingLocalFile, setIsSharingLocalFile] = useState(false)
   const remoteTranscriptJob =
     item.kind === 'remote'
       ? getMainAiJobs(item.ai_jobs).lastAiJobTranscript
@@ -431,9 +485,22 @@ export function RecordingListItem({
     item.kind === 'remote' &&
     remoteTranscriptJob?.status === 'failed' &&
     Boolean(remoteTranscriptJob?.id) &&
-    !hasPendingTranscriptJob
+    !hasPendingTranscriptJob &&
+    canRetryAiJob(remoteTranscriptJob) &&
+    !retryBlocked
   const isOpenableRemoteRecording =
-    item.kind === 'remote' && remoteTranscriptJob?.status === 'success'
+    item.kind === 'remote' &&
+    (remoteTranscriptJob?.status === 'success' ||
+      remoteTranscriptJob?.status === 'failed')
+  const isShareableLocalRecording =
+    item.kind === 'local' &&
+    (item.uploadingStatus === 'failed' ||
+      item.uploadingStatus === 'blocked' ||
+      item.uploadingStatus === 'to_upload')
+
+  const formattedProcessingDuration = useFormattedProcessingDuration(
+    item.kind === 'remote' ? item : null
+  )
 
   const handleOpenRetryModal = useCallback((recording: RemoteRecording) => {
     const { lastAiJobTranscript } = getMainAiJobs(recording.ai_jobs)
@@ -452,13 +519,14 @@ export function RecordingListItem({
         return
       }
       try {
-        await retryWithLanguageMutation.mutateAsync({
+        const job = await retryWithLanguageMutation.mutateAsync({
           id: remoteTranscriptJob.id,
           language,
         })
         setIsRetryModalVisible(false)
-        Alert.alert(t('recordings.menu.retrySuccess'))
-      } catch {
+        showRetryTranscriptResult(t, job)
+      } catch (error) {
+        if (isRateLimitError(error)) return
         Alert.alert(
           t('recordings.menu.errorTitle'),
           t('recordings.menu.retryError')
@@ -467,6 +535,53 @@ export function RecordingListItem({
     },
     [remoteTranscriptJob, retryWithLanguageMutation, t]
   )
+
+  const handleShareLocalRecording = useCallback(async () => {
+    if (!isShareableLocalRecording) {
+      return
+    }
+    if (isSharingLocalFile) {
+      return
+    }
+
+    setIsSharingLocalFile(true)
+    try {
+      const safeTitle = item.title.trim() || item.id
+      const extension =
+        item.filePath.match(/(\.[^./\\]+)$/)?.[1]?.trim() || '.m4a'
+      const normalizedExtension = extension.startsWith('.')
+        ? extension
+        : `.${extension}`
+      await shareLocalRecording(
+        item.filePath,
+        `${safeTitle}${normalizedExtension}`
+      )
+    } catch {
+      Alert.alert(
+        t('recordings.menu.errorTitle'),
+        t('recordings.menu.shareError')
+      )
+    } finally {
+      setIsSharingLocalFile(false)
+    }
+  }, [isShareableLocalRecording, isSharingLocalFile, item, t])
+
+  const handleDeleteBlockedRecording = useCallback(() => {
+    Alert.alert(
+      t('recordings.menu.deleteLocalTitle'),
+      t('recordings.menu.deleteLocalMessage'),
+      [
+        { style: 'cancel', text: t('recordings.deleteCancel') },
+        {
+          style: 'destructive',
+          text: t('recordings.deleteConfirm'),
+          onPress: () => {
+            deleteBlockedRecording(item.id).catch(console.error)
+          },
+        },
+      ]
+    )
+  }, [item.id, t])
 
   const card = (
     <Pressable
@@ -500,14 +615,56 @@ export function RecordingListItem({
                 variant="muted"
                 size="md"
                 numberOfLines={
-                  item.kind === 'local' && item.uploadingStatus === 'failed'
-                    ? 2
+                  item.kind === 'local' && item.uploadingStatus === 'blocked'
+                    ? undefined
                     : 1
                 }
               >
-                {formatRecordMeta(item, t, uploadBlockReason)}
+                {formatRecordMeta(
+                  item,
+                  t,
+                  uploadBlockReason,
+                  formattedProcessingDuration
+                )}
               </AppText>
+              {item.kind === 'local' && item.uploadingStatus === 'blocked' && (
+                <View style={styles.blockedUploadActions}>
+                  <Pressable
+                    onPress={() => retryRecordingUpload(item.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('recordings.menu.retryUpload')}
+                    style={({ pressed }) => [
+                      styles.retryUploadAction,
+                      pressed && styles.shareActionPressed,
+                    ]}
+                  >
+                    <Lucide
+                      name="refresh-cw"
+                      size={20}
+                      color={colors.textPrimary}
+                    />
+                    <AppText>{t('recordings.menu.retryUpload')}</AppText>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleDeleteBlockedRecording}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('recordings.menu.deleteLocal')}
+                    style={({ pressed }) => [
+                      styles.retryUploadAction,
+                      pressed && styles.shareActionPressed,
+                    ]}
+                  >
+                    <Lucide
+                      name="trash-2"
+                      size={20}
+                      color={colors.errorSecondary}
+                    />
+                    <AppText>{t('recordings.menu.deleteLocal')}</AppText>
+                  </Pressable>
+                </View>
+              )}
               {item.kind === 'local' &&
+                uploadBlockReason !== 'rateLimited' &&
                 item.uploadingStatus === 'uploading' && (
                   <UploadProgress
                     uploadedBytes={item.uploadProgress?.uploadedBytes ?? 0}
@@ -522,6 +679,29 @@ export function RecordingListItem({
             </>
           )}
         </View>
+        {isShareableLocalRecording && (
+          <View style={styles.shareActionColumn}>
+            <Pressable
+              onPress={handleShareLocalRecording}
+              disabled={isSharingLocalFile}
+              style={({ pressed }) => [
+                styles.shareAction,
+                isSharingLocalFile && styles.shareActionDisabled,
+                pressed && styles.shareActionPressed,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={t('recordings.menu.share')}
+              accessibilityState={{ disabled: isSharingLocalFile }}
+              hitSlop={4}
+            >
+              {isSharingLocalFile ? (
+                <ActivityIndicator size="small" color={colors.textPrimary} />
+              ) : (
+                <Lucide name="share" size={20} color={colors.textPrimary} />
+              )}
+            </Pressable>
+          </View>
+        )}
       </View>
     </Pressable>
   )
@@ -555,6 +735,7 @@ export function RecordingListItem({
         {card}
       </SwipeableRemoteRow>
       <RetryTranscriptModal
+        mode="retry"
         isVisible={isRetryModalVisible}
         isPending={retryWithLanguageMutation.isPending}
         selectedLanguage={retryLanguage}
@@ -590,6 +771,39 @@ const styles = StyleSheet.create({
   cardHeaderRight: {
     flex: 1,
     gap: 2,
+  },
+  shareActionColumn: {
+    width: 48,
+    alignSelf: 'stretch',
+    marginLeft: 8,
+  },
+  blockedUploadActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+  },
+  retryUploadAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    minHeight: 44,
+    borderRadius: 8,
+    backgroundColor: colors.backgroundSubtle,
+  },
+  shareAction: {
+    flex: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.backgroundSubtle,
+  },
+  shareActionPressed: {
+    backgroundColor: colors.backgroundSubtlePressed,
+  },
+  shareActionDisabled: {
+    opacity: 0.6,
   },
   recordingTitleSkeleton: {
     width: 140,

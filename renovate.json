@@ -1,23 +1,34 @@
 {
-  "extends": ["github>numerique-gouv/renovate-configuration"],
+  "extends": ["github>suitenumerique/ci//renovate/default"],
   "dependencyDashboard": true,
   "labels": ["dependencies", "noChangeLog"],
+  "timezone": "Europe/Paris",
   "packageRules": [
     {
-        "groupName": "js dependencies",
-        "matchManagers": ["npm"],
-        "schedule": ["on the first day of the month"],
-        "matchPackagePatterns": ["*"],
-        "minimumReleaseAge": "7 days",
-        "internalChecksFilter": "strict"
-      },
-      {
-        "groupName": "python dependencies",
-        "matchManagers": ["setup-cfg", "pep621"],
-        "schedule": ["on the first day of the month"],
-        "matchPackagePatterns": ["*"],
-        "minimumReleaseAge": "7 days"
-      },
+      "groupName": "frontend dependencies",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["src/frontend/**"],
+      "schedule": ["* 2-4 * * 5"],
+      "minimumReleaseAge": "7 days",
+      "internalChecksFilter": "strict",
+      "matchPackageNames": ["*"]
+    },
+    {
+      "groupName": "mobile dependencies",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["src/mobile/**"],
+      "schedule": ["* 19-21 * * 6"],
+      "minimumReleaseAge": "7 days",
+      "internalChecksFilter": "strict",
+      "matchPackageNames": ["*"]
+    },
+    {
+      "groupName": "python dependencies",
+      "matchManagers": ["pep621"],
+      "schedule": ["* 17-19 * * 0"],
+      "minimumReleaseAge": "7 days",
+      "matchPackageNames": ["*"]
+    },
     {
       "enabled": false,
       "groupName": "ignored python dependencies",
@@ -31,17 +42,22 @@
       "allowedVersions": "<4.0.0"
     },
     {
-        "groupName": "allowed django versions",
-        "matchManagers": ["pep621"],
-        "matchPackageNames": ["django"],
-        "allowedVersions": "<6.0.0"
+      "groupName": "allowed django versions",
+      "matchManagers": ["pep621"],
+      "matchPackageNames": ["django"],
+      "allowedVersions": "<6.0.0"
     },
     {
       "enabled": false,
       "groupName": "ignored js dependencies",
       "matchManagers": ["npm"],
       "matchPackageNames": [
-        "eslint", "react", "react-dom", "@types/react-dom", "@types/react", "react-i18next"
+        "eslint",
+        "react",
+        "react-dom",
+        "@types/react-dom",
+        "@types/react",
+        "react-i18next"
       ]
     }
   ]

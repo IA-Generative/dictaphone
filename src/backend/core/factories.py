@@ -3,15 +3,17 @@ Core application factories
 """
 
 from io import BytesIO
+from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
-from django.core.files.storage import default_storage
+from django.utils import timezone
 
 import factory.fuzzy
 from faker import Faker
 
 from core import models
+from core.storage import get_storage_for_file
 
 fake = Faker()
 
@@ -31,6 +33,18 @@ class UserFactory(factory.django.DjangoModelFactory):
     flag_show_mobile_app_popup = True
 
 
+class TranscriptionUsageFactory(factory.django.DjangoModelFactory):
+    """A durable transcription quota charge, independent of file and job rows."""
+
+    class Meta:
+        model = models.TranscriptionUsage
+
+    user = factory.SubFactory(UserFactory)
+    ai_job_id = factory.LazyFunction(uuid4)
+    submitted_at = factory.LazyFunction(timezone.now)
+    duration_seconds = 3600
+
+
 class FileFactory(factory.django.DjangoModelFactory):
     """A factory to create files"""
 
@@ -47,7 +61,38 @@ class FileFactory(factory.django.DjangoModelFactory):
         "pyfloat", positive=True, right_digits=2, max_value=3600
     )
     upload_state = None
+    lifecycle_state = models.FileLifecycleStateChoices.ACTIVE
     size = None
+
+    @factory.post_generation
+    def audio_extraction_state(self, create, extracted, **kwargs):
+        """Build attempt history while retaining expressive file fixtures."""
+        if not create or extracted is None:
+            return
+        self.upload_state = models.FileUploadStateChoices.READY
+        self.save(update_fields=["upload_state"])
+        states = models.FileAudioExtractionStateChoices
+        statuses = models.AudioJobStatusChoices
+        status = {
+            states.PENDING_AUDIO_EXTRACTION: statuses.PENDING,
+            states.EXTRACTING_AUDIO: statuses.PROCESSING,
+            states.EXTRACTION_DONE: statuses.SUCCESS,
+            states.AUDIO_EXTRACTION_FAILED: statuses.FAILED,
+        }[extracted]
+        job = models.AudioJob.objects.create(
+            file=self,
+            mode=models.AudioJobModeChoices.TRANSCODING,
+            status=status,
+            duration_seconds=self.duration_seconds,
+        )
+        if extracted == states.EXTRACTION_DONE:
+            models.AudioJob.objects.create(
+                file=self,
+                mode=models.AudioJobModeChoices.VALIDATION,
+                status=statuses.SUCCESS,
+                source_job=job,
+                extraction_id=job.extraction_id,
+            )
 
     @factory.post_generation
     def update_upload_state(self, create, extracted, **kwargs):
@@ -70,7 +115,13 @@ class FileFactory(factory.django.DjangoModelFactory):
             self.size = len(content)
             self.save()
 
-            default_storage.save(self.file_key, BytesIO(content))
+            storage = get_storage_for_file(self)
+            storage.save(self.file_key, BytesIO(content))
+            if (
+                self.audio_extraction_state  # pylint: disable=comparison-with-callable
+                == models.FileAudioExtractionStateChoices.EXTRACTION_DONE
+            ):
+                storage.save(self.audio_file_key, BytesIO(content))
 
 
 class AiFileJobFactory(factory.django.DjangoModelFactory):

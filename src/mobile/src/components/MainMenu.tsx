@@ -10,7 +10,6 @@ import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory
 import { useNavigation } from '@react-navigation/core'
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack'
 import type { RootStackParamList } from '@/navigation/types'
-import { pickAudioFile } from '@/features/share/pickAudioFile'
 
 export default function MainMenu() {
   const [isPopoverVisible, setIsPopoverVisible] = useState(false)
@@ -30,23 +29,6 @@ export default function MainMenu() {
     setIsPopoverVisible(false)
     navigation.navigate('Info')
   }, [navigation])
-
-  const handleImportAudio = useCallback(() => {
-    console.log('[MainMenu] handleImportAudio pressed')
-    setIsPopoverVisible(false)
-    // Wait for the popover to fully dismiss before presenting the picker.
-    // iOS UIDocumentPickerViewController auto-dismisses if presented while
-    // another modal is mid-transition. 600 ms is conservative but safe
-    // even on older devices (iPhone XS).
-    setTimeout(() => {
-      console.log('[MainMenu] calling pickAudioFile()')
-      pickAudioFile()
-        .then((ok) => console.log('[MainMenu] pickAudioFile resolved:', ok))
-        .catch((e) => {
-          console.error('[MainMenu] Audio import failed:', e)
-        })
-    }, 600)
-  }, [])
 
   return (
     <View style={styles.container}>
@@ -68,28 +50,6 @@ export default function MainMenu() {
         }
       >
         <View style={styles.popoverContent}>
-          {isLoggedIn && (
-            <Pressable
-              style={({ pressed }) => [
-                styles.actionButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-              onPress={handleImportAudio}
-            >
-              <Lucide
-                name="file-audio"
-                size={15}
-                color={colors.textPrimary}
-              />
-              <AppText
-                variant="body"
-                color={colors.textPrimary}
-                style={styles.fixMarginBottom}
-              >
-                {t('mainMenu.importAudio')}
-              </AppText>
-            </Pressable>
-          )}
           <Pressable
             style={({ pressed }) => [
               styles.actionButton,

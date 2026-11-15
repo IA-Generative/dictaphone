@@ -1,3 +1,9 @@
+import {
+  areUploadsPaused,
+  clearRateLimit,
+  isRateLimitError,
+  useRateLimits,
+} from '@/api/rateLimits'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { create } from 'zustand'
 import { type LocalRecording, recordingSchema } from '../types/localRecording'
@@ -5,25 +11,36 @@ import { type AppSettings, appSettingsSchema } from '../types/settings'
 import { z } from 'zod/v4'
 import NetInfo from '@react-native-community/netinfo'
 import { uploadRecordingToMirai } from '@/features/files/api/uploadRecording'
-import { queryClient } from '@/api/queryClient'
-import { keys } from '@/api/queryKeys'
+import { useDeviceStore } from '@/features/device/store'
 import { mmkvStorage } from '@/services/index'
-
-// HEAD-like existence check for a file:// URI via XHR. iOS's RCTNetworking
-// dispatches a tiny GET request against the local file — if it can't be
-// opened, onerror fires within milliseconds.
-function fileExists(fileUri: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', fileUri, true)
-    xhr.responseType = 'arraybuffer'
-    xhr.timeout = 2000
-    xhr.onload = () => resolve(true)
-    xhr.onerror = () => resolve(false)
-    xhr.ontimeout = () => resolve(false)
-    xhr.send()
-  })
-}
+import omit from '@/utils/omit'
+import {
+  deleteLocalRecordingFile,
+  getFileName,
+  listDocumentM4AFiles,
+  LocalDocumentM4AFile,
+  localRecordingFileExists,
+} from '@/utils/localRecordingFile'
+import i18n from '@/i18n'
+import { type TTranscriptionLanguage } from '@/features/ai-jobs/api/types'
+import {
+  concatSubAudioFiles,
+  FILENAME_PREFIX_SEPARATOR,
+} from '@/features/recordings/utils/concatSubAudioFiles'
+import uuid from 'react-native-uuid'
+import { wait } from '@/utils/wait'
+import { AppState } from 'react-native'
+import {
+  clearUpload,
+  resumeUpload,
+  setFileUploadAppActive,
+} from '@/utils/fileUpload'
+import { selectRecordingToUpload } from '@/services/uploadSelection'
+import {
+  resetUploadRetry,
+  restoreUploadAfterRestart,
+  uploadFailureUpdate,
+} from './uploadRetry'
 
 const defaultSettings: AppSettings = {
   language: 'en',
@@ -32,11 +49,66 @@ const defaultSettings: AppSettings = {
 
 const recordingListSchema = z.array(recordingSchema)
 
+const removeMissingLocalRecordingsAfterHydration = async (
+  recordings: LocalRecording[]
+): Promise<void> => {
+  const missingRecordings: LocalRecording[] = []
+
+  for (const recording of recordings) {
+    try {
+      const fileExists = await localRecordingFileExists(recording.filePath)
+      if (!fileExists) {
+        missingRecordings.push(recording)
+      }
+    } catch (error) {
+      console.error(
+        `Failed to check local recording file for id "${recording.id}":`,
+        error
+      )
+    }
+  }
+
+  if (missingRecordings.length === 0) {
+    return
+  }
+
+  const missingRecordingIdsSet = new Set(
+    missingRecordings.map((recording) => recording.id)
+  )
+  const removedFileList = missingRecordings
+    .map((recording) => {
+      const trimmedTitle = recording.title.trim()
+      return `• ${
+        trimmedTitle.length > 0
+          ? trimmedTitle
+          : i18n.t('recordings.missingFiles.untitledFallback')
+      }`
+    })
+    .join('\n')
+
+  useRecordingsStore.setState((state) => ({
+    recordings: state.recordings.filter(
+      (recording) => !missingRecordingIdsSet.has(recording.id)
+    ),
+    missingFilesPending: state.missingFilesPending
+      ? `${state.missingFilesPending}\n${removedFileList}`
+      : removedFileList,
+  }))
+}
+
+export type TRecoverFilesStatus =
+  | { status: 'to_run' }
+  | { status: 'init' }
+  | { status: 'running' }
+  | { status: 'done'; recovered: string[] }
+
 export interface RecordingsStore {
   hasHydrated: boolean
   recordings: LocalRecording[]
+  missingFilesPending: string | null
+  recoverFilesStatus: TRecoverFilesStatus
   addRecording: (recording: LocalRecording) => void
-  deleteRecording: (recordingId: string) => void
+  deleteRecording: (recordingId: string) => Promise<void>
   updateRecording: (
     id: string,
     data: Partial<Omit<LocalRecording, 'id'>>
@@ -46,7 +118,11 @@ export interface RecordingsStore {
 export interface SettingsStore {
   hasHydrated: boolean
   settings: AppSettings
+  newTranscriptionLanguage: TTranscriptionLanguage | null
+  androidBatteryWarningShown: boolean
   setSettings: (settings: AppSettings) => void
+  setNewTranscriptionLanguage: (language: TTranscriptionLanguage) => void
+  setAndroidBatteryWarningShown: (shown: boolean) => void
   resetSettings: () => void
 }
 
@@ -75,52 +151,77 @@ const checkCanUpload = async (): Promise<boolean> => {
 }
 
 let isUploadInProgress = false
-const triggerUpload = async (): Promise<void> => {
-  if (isUploadInProgress) {
-    return
-  }
+// Native upload the manager is waiting on, so Sync now can lift its Wi-Fi-only
+// policy; otherwise a Wi-Fi-only transfer waits for connectivity indefinitely.
+let activeNativeUploadId: string | undefined
+let uploadRetryTimer: ReturnType<typeof setTimeout> | undefined
 
-  const canUpload = await checkCanUpload()
-  if (!canUpload) {
-    return
-  }
-
-  const { recordings, updateRecording, deleteRecording } =
-    useRecordingsStore.getState()
-  const recordingToUpload =
-    recordings.find((r) => r.uploadingStatus === 'to_upload') ?? null
-
-  if (!recordingToUpload) {
-    // reset bypass wifiOnly
-    setBypassWifiOnly(false)
-    return
-  }
-
-  // Cheap pre-flight: if the underlying file is gone (e.g. the app was
-  // reinstalled and the sandbox container UUID changed), drop the entry
-  // before attempting the multipart upload — otherwise the fetch silently
-  // stalls and Metro disconnects.
-  const exists = await fileExists(recordingToUpload.filePath)
-  if (!exists) {
-    console.warn(
-      'Recording file missing on disk, dropping:',
-      recordingToUpload.filePath
+const scheduleUploadRetry = () => {
+  clearTimeout(uploadRetryTimer)
+  uploadRetryTimer = undefined
+  if (areUploadsPaused()) return
+  const retryTimes = useRecordingsStore
+    .getState()
+    .recordings.filter(
+      (recording) =>
+        recording.uploadingStatus === 'to_upload' &&
+        recording.uploadRetryAt !== undefined
     )
-    deleteRecording(recordingToUpload.id)
-    isUploadInProgress = false
-    triggerUpload().catch(console.error)
+    .map((recording) => recording.uploadRetryAt!)
+  if (retryTimes.length > 0) {
+    uploadRetryTimer = setTimeout(
+      () => {
+        triggerUpload().catch(console.error)
+      },
+      Math.max(0, Math.min(...retryTimes) - Date.now())
+    )
+  }
+}
+
+const triggerUpload = async (): Promise<void> => {
+  if (isUploadInProgress || areUploadsPaused()) {
+    return
+  }
+
+  // MIrAI fork: uploads are authorized by the device enrollment (device_token),
+  // not by a user account.
+  if (!useDeviceStore.getState().enrollment) {
     return
   }
 
   isUploadInProgress = true
-  updateRecording(recordingToUpload.id, { uploadingStatus: 'uploading' })
+
+  const canUpload = await checkCanUpload()
+  if (!canUpload || areUploadsPaused()) {
+    isUploadInProgress = false
+    return
+  }
+
+  const { recordings, updateRecording } = useRecordingsStore.getState()
+  const recordingToUpload = selectRecordingToUpload(recordings)
+
+  if (!recordingToUpload) {
+    // reset bypass wifiOnly
+    if (
+      !recordings.some((recording) => recording.uploadingStatus === 'to_upload')
+    ) {
+      setBypassWifiOnly(false)
+    }
+    isUploadInProgress = false
+    scheduleUploadRetry()
+    return
+  }
+  let shouldTriggerNextUpload = false
+  updateRecording(recordingToUpload.id, {
+    uploadingStatus: 'uploading',
+    uploadRetryAt: undefined,
+  })
 
   try {
     // Shared files keep their original filename (with extension); recorder
     // outputs untitled .m4a, so we append the extension if missing.
-    const filename = /\.[^./\\]+$/.test(recordingToUpload.title)
-      ? recordingToUpload.title
-      : `${recordingToUpload.title}.m4a`
+    const baseName = recordingToUpload.fileName ?? recordingToUpload.title
+    const filename = /\.[^./\\]+$/.test(baseName) ? baseName : `${baseName}.m4a`
     const response = await uploadRecordingToMirai({
       filePath: recordingToUpload.filePath,
       filename,
@@ -130,15 +231,16 @@ const triggerUpload = async (): Promise<void> => {
         })
       },
     })
-    // Keep the recording in the list so we can show the pipeline status
-    // (antivirus → transcoding → transferred) coming from the Socket.IO
-    // `file_status` events. The row is only removed when the pipeline
-    // reaches a terminal success state (cf. useFileStatusSocket).
+    // Keep the recording in the list so we can show the server pipeline
+    // status (antivirus → transcoding → transferred) coming from the
+    // Socket.IO `file_status` events. The row is only removed when the
+    // pipeline reaches a terminal success state (cf. useFileStatusSocket).
     updateRecording(recordingToUpload.id, {
       uploadingStatus: 'uploaded',
       serverFileId: response.file_id,
       serverStatus: 'pending',
       serverStatusMessage: undefined,
+      uploadAttemptCount: 0,
       uploadProgress: {
         uploadedBytes: 1,
         totalBytes: 1,
@@ -146,54 +248,93 @@ const triggerUpload = async (): Promise<void> => {
         percentage: 100,
       },
     })
-    await queryClient.invalidateQueries({ queryKey: [keys.files] })
+    shouldTriggerNextUpload = true
   } catch (error) {
-    console.error('Upload to mirai failed:', error)
-    const message =
-      error instanceof Error ? error.message : String(error ?? '')
-    // App reinstall changes the sandbox container UUID, so any recording
-    // whose absolute path points to the previous container can never be
-    // uploaded. Drop the entry rather than leaving it stuck as 'failed'.
-    const isFileMissing =
-      message.includes('no such file') ||
-      message.includes('No such file') ||
-      message.includes("couldn't be opened") ||
-      message.includes('NSPOSIXErrorDomain Code=2') ||
-      message.includes('NSCocoaErrorDomain Code=260')
-    if (isFileMissing) {
-      console.warn(
-        'Recording file no longer exists, dropping entry:',
-        recordingToUpload.id
-      )
-      deleteRecording(recordingToUpload.id)
-    } else {
+    console.error('Upload to MIrAI failed:', error)
+    updateRecording(recordingToUpload.id, {
+      ...uploadFailureUpdate(recordingToUpload, error),
       // Keep the server-provided reason (e.g. an expired upload token asking
       // the user to renew it in the admin) so the list row can show something
       // actionable instead of a generic failure.
-      updateRecording(recordingToUpload.id, {
-        uploadingStatus: 'failed',
-        serverStatusMessage: message || undefined,
-      })
-    }
+      serverStatusMessage:
+        error instanceof Error && error.message ? error.message : undefined,
+    })
+    shouldTriggerNextUpload = !isRateLimitError(error)
   } finally {
     isUploadInProgress = false
-    triggerUpload().catch(console.error)
+    activeNativeUploadId = undefined
+    scheduleUploadRetry()
+    if (shouldTriggerNextUpload) {
+      triggerUpload().catch(console.error)
+    }
   }
+}
+
+/** Resumes uploads once the cooldown expires, or on user action without Retry-After. */
+export const resumeRateLimitedUploads = () => {
+  clearRateLimit('upload')
+  triggerUpload().catch(console.error)
+}
+
+export const retryRecordingUpload = (recordingId: string) => {
+  useRecordingsStore.getState().updateRecording(recordingId, resetUploadRetry())
+  triggerUpload().catch(console.error)
+}
+
+/** Requeue blocked recordings whose cause may have gone away (all when omitted). */
+export const unblockUploads = (
+  reasons?: NonNullable<LocalRecording['uploadBlockedReason']>[]
+) => {
+  const { recordings, updateRecording } = useRecordingsStore.getState()
+  recordings
+    .filter(
+      (recording) =>
+        recording.uploadingStatus === 'blocked' &&
+        (!reasons ||
+          reasons.includes(recording.uploadBlockedReason ?? 'transient'))
+    )
+    .forEach((recording) => updateRecording(recording.id, resetUploadRetry()))
+  triggerUpload().catch(console.error)
+}
+
+/** Lets the user discard a recording the server keeps rejecting. */
+export const deleteBlockedRecording = async (recordingId: string) => {
+  const { recordings, deleteRecording } = useRecordingsStore.getState()
+  const recording = recordings.find((item) => item.id === recordingId)
+  if (recording?.uploadingStatus !== 'blocked') return
+  if (recording.uploadId) {
+    await clearUpload(recording.uploadId).catch(console.error)
+  }
+  await deleteRecording(recordingId)
 }
 
 export const setBypassWifiOnly = (value: boolean) => {
   useUploadStore.getState().setBypassWifiOnly(value)
   if (value) {
-    triggerUpload().catch(console.error)
+    if (activeNativeUploadId) {
+      resumeUpload(activeNativeUploadId, false).catch(console.error)
+    }
+    // Sync now is an explicit retry: also requeue recordings that were blocked.
+    unblockUploads()
   }
 }
 
 let isRecordingsUploadManagerStarted = false
-const startRecordingsUploadManager = () => {
+export const startRecordingsUploadManager = () => {
+  console.info('Start recordings upload manager')
   if (isRecordingsUploadManagerStarted) {
     return
   }
   isRecordingsUploadManagerStarted = true
+
+  setFileUploadAppActive(AppState.currentState === 'active')
+  AppState.addEventListener('change', (state) => {
+    const active = state === 'active'
+    setFileUploadAppActive(active)
+    if (active) {
+      unblockUploads(['transient'])
+    }
+  })
 
   useRecordingsStore.subscribe((state) => {
     if (state.recordings.some((r) => r.uploadingStatus === 'to_upload')) {
@@ -201,8 +342,30 @@ const startRecordingsUploadManager = () => {
     }
   })
 
-  NetInfo.addEventListener(() => {
-    triggerUpload().catch(console.error)
+  // Transient failures are often caused by a flaky connection: retry them once
+  // the device reconnects instead of waiting for a manual retry.
+  let wasConnected: boolean | null | undefined
+  NetInfo.addEventListener((state) => {
+    const reconnected = state.isConnected === true && wasConnected === false
+    wasConnected = state.isConnected
+    if (reconnected) {
+      unblockUploads(['transient'])
+    } else {
+      triggerUpload().catch(console.error)
+    }
+  })
+
+  let uploadResumeTimer: ReturnType<typeof setTimeout> | undefined
+  useRateLimits.subscribe(({ cooldowns }, previous) => {
+    const retryAt = cooldowns.upload
+    if (retryAt === previous.cooldowns.upload) return
+    clearTimeout(uploadResumeTimer)
+    // Without Retry-After, uploads stay paused until the user resumes them.
+    if (retryAt == null) return
+    uploadResumeTimer = setTimeout(
+      resumeRateLimitedUploads,
+      Math.min(Math.max(0, retryAt - Date.now()), 2_147_483_647)
+    )
   })
 
   triggerUpload().catch(console.error)
@@ -210,47 +373,81 @@ const startRecordingsUploadManager = () => {
 
 export const useRecordingsStore = create<RecordingsStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       hasHydrated: false,
       recordings: [],
+      missingFilesPending: null,
+      recoverFilesStatus: { status: 'to_run' },
       addRecording: (recording) =>
         set((state) => ({ recordings: [recording, ...state.recordings] })),
-      deleteRecording: (recordingId) =>
+      deleteRecording: async (recordingId) => {
+        const recording = get().recordings.find(
+          (item) => item.id === recordingId
+        )
+        if (recording) {
+          deleteLocalRecordingFile(recording.filePath).catch((error) => {
+            console.error(
+              `Failed to delete local recording file for id "${recordingId}":`,
+              error
+            )
+          })
+        }
         set((state) => ({
           recordings: state.recordings.filter(
-            (recording) => recording.id !== recordingId
+            (stateRecording) => stateRecording.id !== recordingId
           ),
-        })),
+        }))
+      },
       updateRecording: (id, data) =>
         set((state) => ({
           recordings: state.recordings.map((recording) =>
             recording.id === id ? { ...recording, ...data } : recording
           ),
         })),
+      clearMissingFilesPending: () => set({ missingFilesPending: null }),
     }),
     {
       name: 'recordings',
       storage: createJSONStorage(() => mmkvStorage),
       version: 1,
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          const parsed = recordingListSchema.safeParse(state.recordings)
-          state.recordings = parsed.success
-            ? // Reset transient client states ('uploading' → 'to_upload') so
-              // the upload pipeline picks them up after a relaunch. Keep
-              // 'uploaded' entries as-is — they have a serverFileId and the
-              // Socket.IO listener is watching their pipeline progress.
-              parsed.data.map((el) => ({
-                ...el,
-                uploadingStatus:
-                  el.uploadingStatus === 'uploaded'
-                    ? 'uploaded'
-                    : 'to_upload',
-                uploadProgress: undefined,
-              }))
-            : []
+      partialize: (state) =>
+        omit(state, [
+          'hasHydrated',
+          'missingFilesPending',
+          'recoverFilesStatus',
+        ]),
+      // MMKV hydrates during create(), before useRecordingsStore is assigned.
+      // Normalize in merge so even the first published state is ready to use.
+      merge: (persistedState, currentState) => {
+        const mergedState = {
+          ...currentState,
+          ...(persistedState as Partial<RecordingsStore>),
         }
-        useRecordingsStore.setState({ hasHydrated: true })
+        const parsed = recordingListSchema.safeParse(mergedState.recordings)
+        return {
+          ...mergedState,
+          recordings: parsed.success
+            ? parsed.data.map(restoreUploadAfterRestart)
+            : [],
+          recoverFilesStatus: { status: 'to_run' },
+          hasHydrated: true,
+        }
+      },
+      onRehydrateStorage: (initialState) => (state) => {
+        if (state) {
+          removeMissingLocalRecordingsAfterHydration(state.recordings).catch(
+            (error) => {
+              console.error(
+                'Failed to cleanup missing local recordings after rehydration:',
+                error
+              )
+            }
+          )
+        } else {
+          // No store API during construction, and no write of empty defaults
+          // over saved recordings when storage could not be read.
+          initialState.hasHydrated = true
+        }
       },
     }
   )
@@ -261,19 +458,33 @@ export const useSettingsStore = create<SettingsStore>()(
     (set) => ({
       hasHydrated: false,
       settings: { ...defaultSettings },
+      newTranscriptionLanguage: null,
+      androidBatteryWarningShown: false,
       setSettings: (settings) => set({ settings }),
+      setNewTranscriptionLanguage: (newTranscriptionLanguage) =>
+        set({ newTranscriptionLanguage }),
+      setAndroidBatteryWarningShown: (androidBatteryWarningShown) =>
+        set({ androidBatteryWarningShown }),
       resetSettings: () => set({ settings: defaultSettings }),
     }),
     {
       name: 'settings',
       storage: createJSONStorage(() => mmkvStorage),
       version: 1,
-      onRehydrateStorage: () => (state) => {
+      partialize: (state) => omit(state, ['hasHydrated']),
+      onRehydrateStorage: (initialState) => (state) => {
         if (state) {
           const parsed = appSettingsSchema.safeParse(state.settings)
           state.settings = parsed.success ? parsed.data : { ...defaultSettings }
+          state.newTranscriptionLanguage =
+            state.newTranscriptionLanguage ?? 'fr'
+          state.hasHydrated = true
+          state.androidBatteryWarningShown =
+            state.androidBatteryWarningShown ?? false
+        } else {
+          // Mark the initial state without overwriting unread persisted data.
+          initialState.hasHydrated = true
         }
-        useSettingsStore.setState({ hasHydrated: true })
       },
     }
   )
@@ -284,4 +495,162 @@ export const useUploadStore = create<UploadStore>()((set) => ({
   setBypassWifiOnly: (value) => set({ bypassWifiOnly: value }),
 }))
 
-startRecordingsUploadManager()
+// A new enrollment (or a re-enrollment after the token expired) may fix
+// recordings blocked on authentication.
+useDeviceStore.subscribe((newState, oldState) => {
+  if (newState.enrollment && newState.enrollment !== oldState.enrollment) {
+    unblockUploads(['authentication'])
+  }
+})
+
+type TRecoverableFiles = Map<
+  string,
+  [LocalDocumentM4AFile, ...LocalDocumentM4AFile[]]
+>
+
+const appStartTime = Date.now()
+
+const getFilesToRecover = async (): Promise<TRecoverableFiles> => {
+  let localM4AFiles = await listDocumentM4AFiles()
+  if (localM4AFiles.length === 0) {
+    console.info(
+      'No local M4A files found, waiting 1 second to double check in case of race condition'
+    )
+    await wait(1000)
+    localM4AFiles = await listDocumentM4AFiles()
+  }
+  console.info('localM4AFiles', localM4AFiles)
+  const rotatedFilesByFile: TRecoverableFiles = new Map()
+  // We make sure not to include files that were created after the start of the app to avoid
+  // including new recordings if the list takes time to create
+  localM4AFiles = localM4AFiles.filter((el) => el.createdAtMs < appStartTime)
+
+  localM4AFiles.forEach((file) => {
+    const [fileId] = file.name.split(FILENAME_PREFIX_SEPARATOR)
+    const existingFiles = rotatedFilesByFile.get(fileId)
+    if (existingFiles) {
+      existingFiles.push(file)
+    } else {
+      rotatedFilesByFile.set(fileId, [file])
+    }
+  })
+
+  const knownRecordings = useRecordingsStore.getState().recordings
+  const storedFileNamesSet = new Set(
+    knownRecordings.map((recording) =>
+      getFileName(recording.filePath).toLowerCase()
+    )
+  )
+
+  // We remove files that are already in the recordings list
+  for (const [key, files] of rotatedFilesByFile) {
+    if (
+      files.length === 1 &&
+      storedFileNamesSet.has(getFileName(files[0].path))
+    ) {
+      rotatedFilesByFile.delete(key)
+    }
+  }
+
+  return rotatedFilesByFile
+}
+
+const recoverFile = async (
+  subFiles: [LocalDocumentM4AFile, ...LocalDocumentM4AFile[]]
+): Promise<string | null> => {
+  const recoveryLanguage: TTranscriptionLanguage =
+    i18n.language === 'en' ? 'en' : 'fr'
+
+  // We assume that the subfiles are sequentially ordered according to their name
+  subFiles.sort((a, b) => a.name.localeCompare(b.name))
+  const [concatenatedPath, usedSubFiles] = await concatSubAudioFiles(subFiles)
+  if (concatenatedPath === null) {
+    console.error('Failed to concatenate the audio files')
+    return null
+  }
+
+  const createdAtDate =
+    subFiles[0].createdAtMs > 0 ? new Date(subFiles[0].createdAtMs) : new Date()
+  const title = `${i18n.t('home.recordingPrefix')} ${i18n.t(
+    'shared.utils.formatDateTimeStatic',
+    { value: createdAtDate }
+  )}`
+
+  useRecordingsStore.getState().addRecording({
+    created_at: createdAtDate.toISOString(),
+    duration_seconds: usedSubFiles.reduce(
+      (acc, file) => acc + file.durationSeconds,
+      0
+    ),
+    filePath: concatenatedPath,
+    title,
+    id: uuid.v4().toString(),
+    language: recoveryLanguage,
+    uploadingStatus: 'to_upload' as const,
+  })
+  return title
+}
+
+const recoverFiles = async (
+  orphanedFiles: TRecoverableFiles
+): Promise<string[]> => {
+  const recovered = []
+
+  for (const [, subFiles] of orphanedFiles) {
+    try {
+      const recoveredTitle = await recoverFile(subFiles)
+      if (recoveredTitle === null) {
+        console.error('Failed to recover file, skipping, deleted. ', subFiles)
+        continue
+      }
+      recovered.push(recoveredTitle)
+    } catch (e) {
+      console.error(
+        `Failed to recover file, skipping. ${JSON.stringify(subFiles)}`,
+        e
+      )
+    }
+  }
+
+  return recovered
+}
+
+let restoreCheckHasRun = false
+export const runRecovery = async (state?: RecordingsStore) => {
+  if (!state) {
+    state = useRecordingsStore.getState()
+  }
+
+  if (restoreCheckHasRun) return
+  if (!state.hasHydrated) return
+  console.info('Running recovery')
+
+  restoreCheckHasRun = true
+  useRecordingsStore.setState({
+    recoverFilesStatus: { status: 'init' } satisfies TRecoverFilesStatus,
+  })
+  const orphanFiles = await getFilesToRecover()
+  if (orphanFiles.size > 0) {
+    console.info('Orphan files detected', orphanFiles)
+    useRecordingsStore.setState({
+      recoverFilesStatus: { status: 'running' } satisfies TRecoverFilesStatus,
+    })
+    const recovered = await recoverFiles(orphanFiles)
+    useRecordingsStore.setState({
+      recoverFilesStatus: {
+        status: 'done',
+        recovered,
+      } satisfies TRecoverFilesStatus,
+    })
+  } else {
+    console.info('No orphan files detected')
+    useRecordingsStore.setState({
+      recoverFilesStatus: {
+        status: 'done',
+        recovered: [],
+      } satisfies TRecoverFilesStatus,
+    })
+  }
+}
+
+useRecordingsStore.subscribe(runRecovery)

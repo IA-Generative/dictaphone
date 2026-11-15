@@ -19,6 +19,28 @@ def test_models_users_str():
     assert str(user) == user.email
 
 
+@pytest.mark.parametrize(
+    "email, expected",
+    [
+        (" John.Doe@Example.COM ", "john.doe@example.com"),
+        ("Dısk.Diſk.DisK@Example.COM", "dısk.diſk.disK@example.com"),
+        (None, None),
+        ("", ""),
+    ],
+)
+def test_identity_email_normalized_on_save(email, expected):
+    """Identity emails are normalized on creation and update; admin emails are separate."""
+    user = factories.UserFactory(email=email, admin_email="Admin@Example.COM")
+    user.refresh_from_db()
+    assert user.email == expected
+    assert user.admin_email == "Admin@Example.COM"
+
+    user.email = " Updated@Example.COM "
+    user.save(update_fields=["email"])
+    user.refresh_from_db()
+    assert user.email == "updated@example.com"
+
+
 def test_models_users_id_unique():
     """The "id" field should be unique."""
     user = factories.UserFactory()
@@ -26,14 +48,18 @@ def test_models_users_id_unique():
         factories.UserFactory(id=user.id)
 
 
-def test_models_users_send_mail_main_existing():
-    """The "email_user' method should send mail to the user's email address."""
+@mock.patch("celery.current_app.send_task")
+def test_models_users_send_mail_main_existing(mock_send_email):
+    """The "email_user" method should queue mail to the user's email address."""
     user = factories.UserFactory()
 
-    with mock.patch("django.core.mail.send_mail") as mock_send:
-        user.email_user("my subject", "my message")
+    user.email_user("my subject", "my message")
 
-    mock_send.assert_called_once_with("my subject", "my message", None, [user.email])
+    mock_send_email.assert_called_once_with(
+        "core.tasks.mail.send_email",
+        args=["my subject", "my message", user.email],
+        kwargs={"from_email": None},
+    )
 
 
 def test_models_users_send_mail_main_missing():

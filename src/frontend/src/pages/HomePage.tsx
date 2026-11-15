@@ -1,13 +1,13 @@
 import { useTranslation } from 'react-i18next'
 import { authUrl } from '@/features/auth/utils/authUrl'
 import { useUser } from '@/features/auth/api/useUser'
-import { Button } from '@gouvfr-lasuite/cunningham-react'
+import { Button } from '@gouvfr-lasuite/ui-components'
 import { Redirect } from 'wouter'
 import { BaseLayout } from '@/layout/BaseLayout'
 import { DownloadAppsButtons } from '@/components/DownloadAppsButtons'
 
 export default function HomePage() {
-  const { t } = useTranslation('home')
+  const { t } = useTranslation(['home', 'layout'])
 
   const { isLoggedIn, isLoading } = useUser()
 
@@ -15,7 +15,11 @@ export default function HomePage() {
 
   if (!isLoggedIn) {
     return (
-      <BaseLayout className="home-page" showShowcaseAssistant={true}>
+      <BaseLayout
+        className="home-page"
+        showShowcaseAssistant={true}
+        pageTitle={t('layout:pageTitles.home')}
+      >
         <>
           <img
             className="home-page__app-logo"
@@ -28,13 +32,17 @@ export default function HomePage() {
               <p>{t('subtitle')}</p>
 
               <div className="home-page__hero__intro__buttons">
-                <Button onClick={() => window.location.replace(authUrl())}>
+                <Button
+                  onClick={() => window.location.replace(authUrl())}
+                  aria-label={t('login')}
+                >
                   {t('login')}
                 </Button>
                 <Button
                   variant="bordered"
                   href="https://assistant.numerique.gouv.fr/"
                   target="_blank"
+                  aria-label={t('discoverAssistantAriaLabel')}
                 >
                   {t('discoverAssistant')}
                 </Button>

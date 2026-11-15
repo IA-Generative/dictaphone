@@ -1,3 +1,6 @@
+import { UploadRateLimitAlert } from '@/components/UploadRateLimitAlert'
+import { UploadLimitAlert } from '@/components/UploadLimitAlert'
+import { useUploadsPaused } from '@/api/rateLimits'
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -35,9 +38,29 @@ import {
   type UploadBlockReason,
 } from '@/screens/recordings/components/RecordingListItem'
 import { StartRecordingSection } from '@/screens/recordings/components/StartRecordingSection'
+import { pickAndQueueFile, ImportedFileError } from '@/services/importedFile'
+
+const importErrorMessage = (
+  t: ReturnType<typeof useTranslation>['t'],
+  code: string
+) => {
+  switch (code) {
+    case 'unsupported_type':
+      return t('recordings.import.errors.unsupported_type')
+    case 'too_large':
+      return t('recordings.import.errors.too_large')
+    case 'too_long':
+      return t('recordings.import.errors.too_long')
+    case 'unrecognized_audio':
+      return t('recordings.import.errors.unrecognized_audio')
+    default:
+      return t('recordings.import.errors.generic')
+  }
+}
 
 export default function RecordingsScreen() {
   const { t } = useTranslation()
+  const uploadsPaused = useUploadsPaused()
   const netInfo = useNetInfo()
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>()
@@ -71,15 +94,19 @@ export default function RecordingsScreen() {
   const [fileIdBeingDeleted, setFileIdBeingDeleted] = useState<string | null>(
     null
   )
+  const [isImporting, setIsImporting] = useState(false)
+  const importLockRef = useRef(false)
   const openedSwipeableRef = useRef<SwipeableRowRef | null>(null)
 
   const uploadBlockReason: UploadBlockReason = !isLoggedIn
     ? 'not-logged-in'
     : !isOnline
       ? 'offline'
-      : settings.wifiOnlyUpload && !isOnWifi && !wifiBypassActivated
-        ? 'wifiOnly'
-        : 'ok'
+      : uploadsPaused
+        ? 'rateLimited'
+        : settings.wifiOnlyUpload && !isOnWifi && !wifiBypassActivated
+          ? 'wifiOnly'
+          : 'ok'
   const showWifiOnlyCard =
     isLoggedIn &&
     isOnline &&
@@ -121,17 +148,9 @@ export default function RecordingsScreen() {
   const handleRefresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: [keys.files] })
 
-    // Retry any failed upload — and unstick anything left in 'uploading'
-    // state (e.g. an iOS app kill mid-upload leaves the flag dangling).
     for (const recording of recordings) {
-      if (
-        recording.uploadingStatus === 'failed' ||
-        recording.uploadingStatus === 'uploading'
-      ) {
-        updateRecording(recording.id, {
-          uploadingStatus: 'to_upload',
-          uploadProgress: undefined,
-        })
+      if (recording.uploadingStatus === 'failed') {
+        updateRecording(recording.id, { uploadingStatus: 'to_upload' })
       }
     }
   }, [queryClient, recordings, updateRecording])
@@ -143,6 +162,26 @@ export default function RecordingsScreen() {
   const handleStartRecording = useCallback(() => {
     navigation.navigate('RecordingInProgress')
   }, [navigation])
+
+  const handleImportFile = useCallback(async () => {
+    if (importLockRef.current) {
+      return
+    }
+    importLockRef.current = true
+    setIsImporting(true)
+    try {
+      await pickAndQueueFile()
+    } catch (error) {
+      const code = error instanceof ImportedFileError ? error.code : 'generic'
+      Alert.alert(
+        t('recordings.import.errorTitle'),
+        importErrorMessage(t, code)
+      )
+    } finally {
+      importLockRef.current = false
+      setIsImporting(false)
+    }
+  }, [t])
 
   const handleOpenRecording = useCallback(
     (item: LocalOrRemoteRecording) => {
@@ -247,8 +286,27 @@ export default function RecordingsScreen() {
       <FlatList
         data={allRecordings}
         keyExtractor={(item) => item.id}
+        ListHeaderComponent={
+          <>
+            <UploadRateLimitAlert />
+            <UploadLimitAlert />
+          </>
+        }
+        ListEmptyComponent={
+          !isLoading && !filesQ.isError && (!isLoggedIn || filesQ.isSuccess) ? (
+            <View style={styles.emptyState}>
+              <AppText variant="heading" align="center">
+                {t('recordings.emptyTitle')}
+              </AppText>
+              <AppText variant="subtitle" align="center">
+                {t('recordings.emptySubtitle')}
+              </AppText>
+            </View>
+          ) : null
+        }
         contentContainerStyle={[
           styles.listContent,
+          allRecordings.length === 0 && styles.emptyListContent,
           {
             marginBottom: insets.paddingBottom + 40,
           },
@@ -281,7 +339,12 @@ export default function RecordingsScreen() {
         }
       />
 
-      <StartRecordingSection onStartRecording={handleStartRecording} t={t} />
+      <StartRecordingSection
+        onStartRecording={handleStartRecording}
+        onImportFile={handleImportFile}
+        isImporting={isImporting}
+        t={t}
+      />
     </View>
   )
 }
@@ -291,6 +354,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {},
+  emptyListContent: {
+    flexGrow: 1,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 36,
+    gap: 8,
+  },
   recordingListSeparator: {
     height: 1,
     backgroundColor: colors.surfacePrimary,

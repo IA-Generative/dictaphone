@@ -1,8 +1,11 @@
-FROM node:22-alpine AS frontend-deps
+# Browser assets are architecture-independent. Build them natively to avoid
+# running Node, TypeScript and Vite under QEMU for ARM64 production images.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-deps
 
 WORKDIR /home/frontend/
 
 COPY ./src/frontend/package.json ./package.json
+COPY ./src/frontend/.npmrc ./.npmrc
 COPY ./src/frontend/package-lock.json ./package-lock.json
 
 RUN npm ci
@@ -35,7 +38,7 @@ ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 RUN npm run build
 
 # ---- Front-end image ----
-FROM nginxinc/nginx-unprivileged:alpine3.23 AS frontend-production
+FROM nginx/nginx-unprivileged:alpine3.24 AS frontend-production
 
 USER root
 RUN apk update && apk upgrade libssl3 \

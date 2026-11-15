@@ -1,21 +1,41 @@
 {
+  "title": "Assistant Transcripts (beta)",
+  "newRecording": "New recording",
+  "myRecordings": "My recordings",
+  "mySavedRecordings": "My saved recordings",
   "errorFetching": "Error fetching recordings",
   "noRecordings": "You don't have any recordings yet.",
   "noRecordingsTrash": "You don't have any recordings in the trash.",
   "notFound": "Recording not found",
   "deleted": "Deleted",
   "subtitle": "Record your in-person meetings and access your transcripts.",
-  "logoAlt": "Transcripts logo",
+  "logoAlt": "Assistant Transcripts",
   "uploadButtonAriaLabel": "Upload recordings",
   "uploadInputAriaLabel": "Upload audio recordings",
   "metadata": {
-    "ariaLabel": "Recording metadata"
+    "ariaLabel": "Recording metadata",
+    "audioKeptUntil": "Audio recording is kept until {{value, formatDate}}",
+    "fileKeptUntil": "Transcript is kept until {{value, formatDate}}",
+    "dataPolicyTooltip": "Your recordings are kept on our servers for {{originalDataKeptFor}} days. The transcripts (text) are kept for {{transcriptDataKeptFor}} days. This policy applies to new recordings and may differ for older recordings."
+  },
+  "audioExtraction": {
+    "pending": "Preparing audio",
+    "extracting": "Converting audio",
+    "transcriptPending": "We first preprocess your audio before transcription can begin. This usually takes a few seconds to a few minutes.",
+    "failed": "Invalid audio file",
+    "failedDescription": "We couldn't extract the audio from the file, it might be corrupted.",
+    "failedAriaLabel": "Audio extraction failed"
+  },
+  "createInDocsModal": {
+    "title": "Creating your Docs document",
+    "description": "Please wait while your transcript is added to Docs."
   },
   "uploadTooltip": {
     "title": "Upload files",
     "supportedFormats": "Supported formats: {{formats, list}}",
     "noSupportedFormats": "none",
-    "maxFileSize": "Max file size: {{maxSize}}"
+    "maxFileSize": "Max file size: {{maxSize}}",
+    "maxDuration": "Max file duration: {{duration, formatDuration}}"
   },
   "recovery": {
     "blockNewRecordingAlert": "A recording hasn't been transferred and is still stored locally. Please transfer it or delete it before starting a new recording."
@@ -24,17 +44,17 @@
     "title": "Local recordings waiting for upload",
     "description": "These recordings are still stored in this browser.",
     "recordingLabel": "Recording {{value, formatDateTimeStatic}}",
-    "badges": {
-      "local": "local",
-      "notUploaded": "Not uploaded",
-      "failedToUpload": "Failed to upload",
-      "interrupted": "Interrupted"
+    "tooltip": {
+      "notUploaded": "Recording hasn't been uploaded yet",
+      "failedToUpload": "Uploading failed, please retry or download the recording for later upload.",
+      "interrupted": "The recording was abruptly interrupted. You can retry uploading the part that has been saved."
     },
     "uploadFailed": "Upload failed.",
-    "confirmDiscard": "Discard this local recording?",
+    "confirmDiscard": "Discard this local recording? (it will be lost forever)",
     "actions": {
       "upload": "Upload",
       "retry": "Retry",
+      "retryAriaLabel": "Retry uploading this recording",
       "download": "Download",
       "discard": "Discard"
     }
@@ -61,7 +81,8 @@
     },
     "deleteModal": {
       "title": "Delete recording",
-      "description": "Are you sure you want to delete this recording and associated transcript? The transcript exported to Docs will remain available in Docs."
+      "description": "Are you sure you want to delete this recording and associated transcript?",
+      "descriptionWithDocsLink": "Are you sure you want to delete this recording and associated transcript? The transcript exported to Docs will remain available in Docs."
     },
     "restore": {
       "label": "Restore",
@@ -79,6 +100,17 @@
       "error": "Failed to restart generation",
       "disabledPendingLabel": "Retry (in progress)"
     },
+    "changeLanguage": {
+      "label": "Change language",
+      "subLabel": "Reprocesses the recording",
+      "success": "New transcription requested successfully",
+      "error": "Failed to change the language of the transcription"
+    },
+    "export": {
+      "label": "Export",
+      "success": "Transcript exported",
+      "error": "Failed to export transcript"
+    },
     "deletePermanently": {
       "label": "Delete permanently",
       "success": "Recording permanently deleted",
@@ -92,12 +124,30 @@
     "retryModal": {
       "title": "Regenerate transcript",
       "description": "Pick a language for the new generation.",
-      "languageLabel": "Language",
+      "mainAction": "Retry"
+    },
+    "changeLanguageModal": {
+      "title": "Change language",
+      "description": "Pick a language to transcribe this recording in.",
+      "selectLangLabel": "Language",
       "languageOptions": {
         "en": "English",
         "fr": "French",
         "de": "German",
         "nl": "Dutch"
+      },
+      "extra": "Reprocessing takes a few minutes and replaces the current transcript.",
+      "mainAction": "Transcribe"
+    },
+    "exportModal": {
+      "title": "Export transcript",
+      "description": "Choose a format.",
+      "formatLabel": "Format",
+      "submit": "Export",
+      "formatOptions": {
+        "markdown": "Markdown",
+        "srt": "Subtitles (srt) - Beta",
+        "json": "Raw json"
       }
     }
   },
@@ -107,17 +157,21 @@
     "segmentSeekAriaLabel": "Seek to {{timestamp}} ({{speaker}})",
     "noSpeaker": "Unknown speaker",
     "openInDocsCta": "Open in Docs",
+    "createInDocsError": "Unable to create the Docs document right now. Please try again.",
+    "openInDocsError": "Unable to open the Docs document right now. Please try again.",
     "copySuccess": "Transcript copied to clipboard",
     "copyError": "Failed to copy transcript to clipboard",
     "status": {
-      "pending": "Transcript is still being generated.",
-      "failed": "Transcript generation failed.",
-      "empty": "Transcript is empty."
+      "pending": "Transcript is still being generated",
+      "failed": "Transcript generation failed",
+      "empty": "Transcript is empty",
+      "processing": "Processing ∼ {{value}}",
+      "processingLong": "Transcription is being generated and will be available in approximately <1>{{value}}</1>."
     },
     "statusPreview": {
-      "pending": "Pending transcript",
-      "failed": "Transcript error",
-      "success": "Transcript"
+      "pending": "Pending transcription",
+      "failed": "Transcription error",
+      "success": "Transcript generated successfully"
     },
     "speaker": "Speaker"
   },
@@ -132,7 +186,7 @@
     "statusPreview": {
       "pending": "Pending summary",
       "failed": "Summary error",
-      "success": "Summary"
+      "success": "Summary generated successfully"
     }
   },
   "player": {
@@ -143,6 +197,9 @@
     "pause": "Pause",
     "rewind": "Rewind",
     "forward": "Forward",
+    "speed1": "Set playback speed to 1x (currently 2x)",
+    "speed15": "Set playback speed to 1.5x (currently 1x)",
+    "speed2": "Set playback speed to 2x (currently 1.5x)",
     "download": "Download",
     "previous": "Previous",
     "next": "Skip",
@@ -150,5 +207,14 @@
     "loopOff": "Enable loop",
     "volume": "Mute",
     "volumeMute": "Unmute"
+  },
+  "failures": {
+    "tooLong": "This audio is too long to transcribe.",
+    "tooLongDescription": "The maximum audio duration is {{duration}}. Shorten the audio and submit it again.",
+    "quota": "Transcription audio allowance reached.",
+    "quotaDescription": "The service allows your account to submit up to {{hours}} hours of audio in a rolling 24-hour period, including retries. Try again later when allowance becomes available.",
+    "quotaWithoutLimit": "The transcription audio allowance set by the service for your account has been reached. Try again later when allowance becomes available.",
+    "faq": "Read the FAQ",
+    "tooLongFaqUrl": "https://docs.numerique.gouv.fr/docs/95fcf4c6-09bf-43ec-bb78-5fd9de6be712/#1bcb3602-6b40-433b-a23f-c9cde224f5ce"
   }
 }

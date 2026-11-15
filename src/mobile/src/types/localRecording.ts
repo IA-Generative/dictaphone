@@ -1,9 +1,13 @@
 import { z } from 'zod/v4'
+import { TRANSCRIPTION_LANGUAGES } from '@/features/ai-jobs/constants'
+
+export const transcriptionLanguageSchema = z.enum(TRANSCRIPTION_LANGUAGES)
 
 export const uploadingStatusSchema = z.enum([
   'to_upload',
   'uploading',
   'failed',
+  'blocked',
   'uploaded',
 ])
 
@@ -36,7 +40,18 @@ export const recordingSchema = z.object({
   filePath: z.string(),
   id: z.string(),
   title: z.string(),
+  language: transcriptionLanguageSchema.default('fr'),
   uploadingStatus: uploadingStatusSchema,
+  source: z.enum(['mobile_recording', 'mobile_file_upload']).optional(),
+  fileName: z.string().optional(),
+  mimeType: z.string().optional(),
+  uploadId: z.string().optional(),
+  fileId: z.string().optional(),
+  uploadAttemptCount: z.number().int().nonnegative().optional(),
+  uploadRetryAt: z.number().optional(),
+  uploadBlockedReason: z
+    .enum(['transient', 'authentication', 'permission', 'validation'])
+    .optional(),
   uploadProgress: z
     .object({
       uploadedBytes: z.number().nonnegative(),
