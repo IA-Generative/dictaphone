@@ -14,8 +14,10 @@ appId: fr.gouv.mirai.audio-secure
     id: code-input
 - inputText: ${SIMPLE_CODE}
 - pressKey: Enter
+# Large délai : sur un simulateur CI froid, le premier écran peut mettre
+# plus de 20 s à apparaître après l'enrôlement.
 - extendedWaitUntil:
     visible:
       id: new-recording
-    timeout: 20000
+    timeout: 60000
 - takeScreenshot: 02-home
