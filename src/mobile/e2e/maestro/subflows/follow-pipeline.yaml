@@ -3,7 +3,6 @@
 appId: fr.gouv.mirai.audio-secure
 env:
   PIPELINE_STATUS: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete|Analyse antivirale|Fichier sain|Transcodage|Intégré à votre compte|Transcription terminée).*'
-  DONE_STATUS: '.*(Transcription complete|Transcription terminée).*'
 ---
 # Fichier reçu par le serveur : la ligne attend le pipeline (« En attente »).
 - extendedWaitUntil:
@@ -14,18 +13,18 @@ env:
     visible: ${PIPELINE_STATUS}
     timeout: 30000
 - takeScreenshot: pipeline
-- extendedWaitUntil:
-    visible: ${DONE_STATUS}
-    timeout: 30000
-- takeScreenshot: done
-# La ligne disparaît 4 s après le succès final. Sur un écran immobile,
-# Maestro 2.11 abrège les attentes (extendedWaitUntil rend la main au bout
-# d'une seconde environ) : on interroge l'écran en boucle à la place.
+# L'app retire la ligne 4 s après le succès final (et seulement après un
+# succès : un échec la bloque). Sur un simulateur lent, le libellé final
+# peut ne rester visible qu'entre deux lectures de l'écran : on attend donc
+# la disparition de la ligne plutôt que ce libellé. Maestro 2.11 abrège les
+# attentes sur un écran immobile, d'où l'interrogation en boucle.
 - repeat:
     while:
-      visible: ${DONE_STATUS}
-    times: 30
+      visible:
+        id: 'recording-meta-.*'
+    times: 40
     commands:
       - waitForAnimationToEnd:
-          timeout: 500
-- assertNotVisible: ${DONE_STATUS}
+          timeout: 1000
+- assertNotVisible:
+    id: 'recording-meta-.*'
