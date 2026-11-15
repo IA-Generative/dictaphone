@@ -167,7 +167,13 @@ const triggerUpload = async (): Promise<void> => {
       )
       deleteRecording(recordingToUpload.id)
     } else {
-      updateRecording(recordingToUpload.id, { uploadingStatus: 'failed' })
+      // Keep the server-provided reason (e.g. an expired upload token asking
+      // the user to renew it in the admin) so the list row can show something
+      // actionable instead of a generic failure.
+      updateRecording(recordingToUpload.id, {
+        uploadingStatus: 'failed',
+        serverStatusMessage: message || undefined,
+      })
     }
   } finally {
     isUploadInProgress = false

@@ -40,40 +40,38 @@ export function useFileStatusSocket() {
   useEffect(() => {
     if (!qrToken) return
 
+    // Use the default transport order (polling first, then upgrade to
+    // websocket). The mes-réunions DMZ engine.io server rejects a direct
+    // websocket connection ("Invalid websocket upgrade", HTTP 400) — it
+    // requires the initial polling handshake to mint a session id before
+    // upgrading. Forcing `transports: ['websocket']` here meant the socket
+    // never connected, so `file_status` events never arrived and uploads
+    // were stuck spinning on the server-side pipeline status. This mirrors
+    // the PWA, which relies on socket.io's default transports.
     const socket: Socket = io(API_URL, {
-      transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 2000,
     })
 
-    socket.on('connect', () => {
-      console.log('[fileStatus] socket connected, joining room', qrToken)
-      socket.emit('join', { qr_token: qrToken })
-    })
+    // A `file_status` event can arrive before the upload's HTTP response has
+    // set `serverFileId` on the recording: the socket connection is already
+    // open and the server emits status events from its pipeline worker, which
+    // for a small/fast file can beat the multipart POST response being parsed
+    // on-device. We buffer events whose file_id has no recording yet (keeping
+    // the latest per id) and replay them once a recording adopts that id —
+    // otherwise a terminal `kevent_completed` is dropped and the row spins
+    // forever.
+    const pendingByFileId = new Map<string, FileStatusEvent>()
 
-    socket.on('disconnect', (reason) => {
-      console.log('[fileStatus] socket disconnected:', reason)
-    })
-
-    socket.on('file_status', (data: FileStatusEvent) => {
-      if (!data.file_id || !data.status) return
+    const applyEvent = (recordingId: string, data: FileStatusEvent) => {
       const parsedStatus = pipelineStatusSchema.safeParse(data.status)
       const status: PipelineStatus | undefined = parsedStatus.success
         ? parsedStatus.data
         : undefined
 
       const store = useRecordingsStore.getState()
-      const recording = store.recordings.find(
-        (r) => r.serverFileId === data.file_id
-      )
-      if (!recording) {
-        console.log(
-          '[fileStatus] event for unknown file_id (ignored):',
-          data.file_id,
-          data.status
-        )
-        return
-      }
+      const recording = store.recordings.find((r) => r.id === recordingId)
+      if (!recording) return
 
       store.updateRecording(recording.id, {
         serverStatus: status ?? recording.serverStatus,
@@ -90,9 +88,55 @@ export function useFileStatusSocket() {
         // (retry button, etc.) still work — server message kept for context.
         store.updateRecording(recording.id, { uploadingStatus: 'failed' })
       }
+    }
+
+    socket.on('connect', () => {
+      console.log('[fileStatus] socket connected, joining room', qrToken)
+      socket.emit('join', { qr_token: qrToken })
+    })
+
+    socket.on('disconnect', (reason) => {
+      console.log('[fileStatus] socket disconnected:', reason)
+    })
+
+    socket.on('file_status', (data: FileStatusEvent) => {
+      if (!data.file_id || !data.status) return
+
+      const recording = useRecordingsStore
+        .getState()
+        .recordings.find((r) => r.serverFileId === data.file_id)
+      if (!recording) {
+        // Not correlated yet — buffer and replay when the upload response
+        // assigns this file_id to a recording.
+        console.log(
+          '[fileStatus] event buffered for not-yet-known file_id:',
+          data.file_id,
+          data.status
+        )
+        pendingByFileId.set(data.file_id, data)
+        return
+      }
+
+      applyEvent(recording.id, data)
+    })
+
+    // Drain buffered events whenever recordings change (e.g. an upload just
+    // set serverFileId). Cheap: guarded on a non-empty buffer.
+    const unsubscribe = useRecordingsStore.subscribe((state) => {
+      if (pendingByFileId.size === 0) return
+      for (const [fileId, data] of pendingByFileId) {
+        const recording = state.recordings.find(
+          (r) => r.serverFileId === fileId
+        )
+        if (recording) {
+          pendingByFileId.delete(fileId)
+          applyEvent(recording.id, data)
+        }
+      }
     })
 
     return () => {
+      unsubscribe()
       socket.disconnect()
     }
   }, [qrToken])

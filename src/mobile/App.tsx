@@ -20,12 +20,14 @@ import { logPosthogScreenChange } from '@/features/analytics/hooks/useAnalytics'
 import { UpdateModal } from '@/features/config/UpdateModal'
 import { useSharedAudioListener } from '@/features/share/useSharedAudioListener'
 import { useFileStatusSocket } from '@/features/pipeline/useFileStatusSocket'
+import { useDeviceHeartbeat } from '@/features/device/useDeviceHeartbeat'
 
 const RootStack = createNativeStackNavigator<RootStackParamList>()
 
 function App() {
   useSharedAudioListener()
   useFileStatusSocket()
+  useDeviceHeartbeat()
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>

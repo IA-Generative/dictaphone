@@ -42,7 +42,7 @@ export default function RecordingsScreen() {
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>()
   const insets = useInsets()
-  const { recordings, updateRecording } = useLocalRecordings()
+  const { recordings, updateRecording, deleteRecording } = useLocalRecordings()
   const { isLoggedIn, isLoading } = useUser()
   const { settings } = useSettingsStore()
   const queryClient = useQueryClient()
@@ -182,6 +182,16 @@ export default function RecordingsScreen() {
     [executeDeleteRecording]
   )
 
+  // Local recordings live only in the on-device store (no server file yet),
+  // so they are removed locally rather than through the delete API. This also
+  // lets the user clear a row stuck waiting on the upload pipeline.
+  const handleDeleteLocalRecording = useCallback(
+    (recordingId: string) => {
+      deleteRecording(recordingId)
+    },
+    [deleteRecording]
+  )
+
   const handleRowWillOpen = useCallback((row: SwipeableRowRef) => {
     if (openedSwipeableRef.current && openedSwipeableRef.current !== row) {
       openedSwipeableRef.current.close()
@@ -203,6 +213,7 @@ export default function RecordingsScreen() {
         t={t}
         onOpen={handleOpenRecording}
         onDelete={handleDeleteRecording}
+        onDeleteLocal={handleDeleteLocalRecording}
         onWillOpenRow={handleRowWillOpen}
         onCloseRow={handleRowClose}
       />
@@ -210,6 +221,7 @@ export default function RecordingsScreen() {
     [
       uploadBlockReason,
       handleDeleteRecording,
+      handleDeleteLocalRecording,
       handleOpenRecording,
       handleRowClose,
       handleRowWillOpen,

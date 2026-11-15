@@ -134,10 +134,14 @@ function formatRecordMeta(
     if (recording.uploadingStatus === 'uploaded' && recording.serverStatus) {
       return `${durationLabel} • ${pipelineStatusLabel(recording.serverStatus, t)}`
     }
-    if (
-      recording.uploadingStatus === 'failed' ||
-      recording.uploadingStatus === 'to_upload'
-    ) {
+    if (recording.uploadingStatus === 'failed') {
+      // Prefer the server's reason (e.g. expired upload token to renew in the
+      // admin) over the generic label so the failure is actionable.
+      const reason =
+        recording.serverStatusMessage ?? t('recordings.meta.waitingForUpload')
+      return `${durationLabel} • ${reason}`
+    }
+    if (recording.uploadingStatus === 'to_upload') {
       return `${durationLabel} • ${t('recordings.meta.waitingForUpload')}`
     }
     return `${durationLabel} • ${dateLabel}`
@@ -323,12 +327,76 @@ function SwipeableRemoteRow({
   )
 }
 
+type SwipeableLocalRowProps = {
+  onDelete: () => void
+  onWillOpen: (row: SwipeableRowRef) => void
+  onClose: (row: SwipeableRowRef) => void
+  children: React.ReactNode
+}
+
+// Delete-only swipe wrapper for on-device recordings (no retry action). Lets
+// the user remove a local entry — including one stuck waiting on the upload
+// pipeline — which previously had no delete affordance at all.
+function SwipeableLocalRow({
+  onDelete,
+  onWillOpen,
+  onClose,
+  children,
+}: SwipeableLocalRowProps) {
+  const swipeableRef = useRef<SwipeableRowRef | null>(null)
+
+  const handleDeletePress = useCallback(() => {
+    swipeableRef.current?.close()
+    onDelete()
+  }, [onDelete])
+
+  const handleSwipeableWillOpen = useCallback(() => {
+    if (swipeableRef.current) {
+      onWillOpen(swipeableRef.current)
+    }
+  }, [onWillOpen])
+
+  const handleSwipeableClose = useCallback(() => {
+    if (swipeableRef.current) {
+      onClose(swipeableRef.current)
+    }
+  }, [onClose])
+
+  const renderRightActions = useCallback(
+    (progress: SharedValue<number>) => (
+      <RightActions
+        progress={progress}
+        canRetry={false}
+        onRetryPress={() => {}}
+        onPress={handleDeletePress}
+      />
+    ),
+    [handleDeletePress]
+  )
+
+  return (
+    <Swipeable
+      ref={swipeableRef}
+      friction={1.5}
+      overshootRight={false}
+      rightThreshold={OPEN_STATE_THRESHOLD}
+      enableTrackpadTwoFingerGesture
+      onSwipeableWillOpen={handleSwipeableWillOpen}
+      onSwipeableClose={handleSwipeableClose}
+      renderRightActions={renderRightActions}
+    >
+      {children}
+    </Swipeable>
+  )
+}
+
 type RecordingListItemProps = {
   item: LocalOrRemoteRecording
   uploadBlockReason: UploadBlockReason
   t: TFunction
   onOpen: (item: LocalOrRemoteRecording) => void
   onDelete: (fileId: string) => void
+  onDeleteLocal: (recordingId: string) => void
   onWillOpenRow: (row: SwipeableRowRef) => void
   onCloseRow: (row: SwipeableRowRef) => void
 }
@@ -339,6 +407,7 @@ export function RecordingListItem({
   t,
   onOpen,
   onDelete,
+  onDeleteLocal,
   onWillOpenRow,
   onCloseRow,
 }: RecordingListItemProps) {
@@ -427,7 +496,15 @@ export function RecordingListItem({
               >
                 {item.title}
               </AppText>
-              <AppText variant="muted" size="md" numberOfLines={1}>
+              <AppText
+                variant="muted"
+                size="md"
+                numberOfLines={
+                  item.kind === 'local' && item.uploadingStatus === 'failed'
+                    ? 2
+                    : 1
+                }
+              >
                 {formatRecordMeta(item, t, uploadBlockReason)}
               </AppText>
               {item.kind === 'local' &&
@@ -449,8 +526,20 @@ export function RecordingListItem({
     </Pressable>
   )
 
-  if (item.kind !== 'remote') {
+  if (item.kind === 'fake') {
     return card
+  }
+
+  if (item.kind === 'local') {
+    return (
+      <SwipeableLocalRow
+        onDelete={() => onDeleteLocal(item.id)}
+        onWillOpen={onWillOpenRow}
+        onClose={onCloseRow}
+      >
+        {card}
+      </SwipeableLocalRow>
+    )
   }
 
   return (
