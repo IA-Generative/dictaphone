@@ -26,9 +26,9 @@ spec:
       labels:
         {{- include "dictaphone.common.selectorLabels" (list . $component) | nindent 8 }}
     spec:
-      {{- if $.Values.image.credentials }}
+      {{- if $.Values.images.credentials }}
       imagePullSecrets:
-        - name: {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" $.Values.image.credentials) }}
+        - name: {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" $.Values.images.credentials) }}
       {{- end }}
       shareProcessNamespace: {{ .Values.backend.shareProcessNamespace }}
       containers:
@@ -36,8 +36,8 @@ spec:
           {{- toYaml . | nindent 8 }}
         {{- end }}
         - name: {{ .Chart.Name }}
-          image: "{{ (.Values.backend.image | default dict).repository | default .Values.image.repository }}:{{ (.Values.backend.image | default dict).tag | default .Values.image.tag }}"
-          imagePullPolicy: {{ (.Values.backend.image | default dict).pullPolicy | default .Values.image.pullPolicy }}
+          image: "{{ .Values.images.backend.repository }}:{{ .Values.images.backend.tag }}"
+          imagePullPolicy: {{ .Values.images.backend.pullPolicy }}
           {{- with .Values.backend.command }}
           command:
             {{- toYaml . | nindent 12 }}
@@ -60,21 +60,24 @@ spec:
               protocol: TCP
           {{- if .Values.backend.probes.liveness }}
           livenessProbe:
-            {{- include "dictaphone.probes.abstract" (merge .Values.backend.probes.liveness (dict "targetPort" .Values.backend.service.targetPort )) | nindent 12 }}
+            {{- toYaml .Values.backend.probes.liveness | nindent 12 }}
           {{- end }}
           {{- if .Values.backend.probes.readiness }}
           readinessProbe:
-            {{- include "dictaphone.probes.abstract" (merge .Values.backend.probes.readiness (dict "targetPort" .Values.backend.service.targetPort )) | nindent 12 }}
+            {{- toYaml .Values.backend.probes.readiness | nindent 12 }}
           {{- end }}
           {{- if .Values.backend.probes.startup }}
           startupProbe:
-            {{- include "dictaphone.probes.abstract" (merge .Values.backend.probes.startup (dict "targetPort" .Values.backend.service.targetPort )) | nindent 12 }}
+            {{- toYaml .Values.backend.probes.startup | nindent 12 }}
           {{- end }}
           {{- with .Values.backend.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+              readOnly: false
             {{- range $index, $value := .Values.mountFiles }}
             - name: "files-{{ $index }}"
               mountPath: {{ $value.path }}
@@ -103,6 +106,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        - name: tmp
+          {{- toYaml (.Values.backend.tmpVolume | default (dict "emptyDir" (dict))) | nindent 10 }}
         {{- range $index, $value := .Values.mountFiles }}
         - name: "files-{{ $index }}"
           configMap:

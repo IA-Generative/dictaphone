@@ -33,11 +33,7 @@ export function RecordingsTopBar({
         <View style={styles.titleBlock}>
           <LogoWithName style={styles.title} />
           <View style={styles.miraiBadge}>
-            <AppText
-              variant="bodyBold"
-              size="xs"
-              color={colors.primary}
-            >
+            <AppText variant="bodyBold" size="xs" color={colors.primary}>
               by MIrAI
             </AppText>
           </View>

@@ -23,10 +23,13 @@ items:
           template:
             metadata:
               name: {{ $fullName }}-{{ .name }}
+              labels:
+                {{- include "dictaphone.common.selectorLabels" (list $ $component) | nindent 16 }}
+                cronjob-name: {{ .name | quote }}
             spec:
-              {{- if $.Values.image.credentials }}
+              {{- if $.Values.images.credentials }}
               imagePullSecrets:
-                - name: {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" $.Values.image.credentials) }}
+                - name: {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" .) "imageCredentials" $.Values.images.credentials) }}
               {{- end}}
               shareProcessNamespace: {{ $.Values.backend.shareProcessNamespace }}
               containers:
@@ -34,8 +37,8 @@ items:
                   {{- toYaml . | nindent 18 }}
                 {{- end }}
                 - name: {{ $.Chart.Name }}
-                  image: "{{ ($.Values.backend.image | default dict).repository | default $.Values.image.repository }}:{{ ($.Values.backend.image | default dict).tag | default $.Values.image.tag }}"
-                  imagePullPolicy: {{ ($.Values.backend.image | default dict).pullPolicy | default $.Values.image.pullPolicy }}
+                  image: "{{ $.Values.images.backend.repository }}:{{ $.Values.images.backend.tag }}"
+                  imagePullPolicy: {{ $.Values.images.backend.pullPolicy }}
                   args:
                     {{- toYaml .command | nindent 22 }}
                   env:
@@ -51,6 +54,9 @@ items:
                     {{- toYaml . | nindent 22 }}
                   {{- end }}
                   volumeMounts:
+                    - name: tmp
+                      mountPath: /tmp
+                      readOnly: false
                     {{- range $index, $value := $.Values.mountFiles }}
                     - name: "files-{{ $index }}"
                       mountPath: {{ $value.path }}
@@ -68,6 +74,8 @@ items:
                     {{- end }}
               restartPolicy: {{ .restartPolicy | default "Never" }}
               volumes:
+                - name: tmp
+                  {{- toYaml ($.Values.backend.tmpVolume | default (dict "emptyDir" (dict))) | nindent 18 }}
                 {{- range $index, $value := $.Values.mountFiles }}
                 - name: "files-{{ $index }}"
                   configMap:

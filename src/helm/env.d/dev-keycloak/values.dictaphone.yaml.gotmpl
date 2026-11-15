@@ -1,19 +1,36 @@
-image:
-  repository: localhost:5001/dictaphone-backend
-  pullPolicy: Always
-  tag: "latest"
+images:
+  backend:
+    repository: localhost:5001/dictaphone-backend
+    pullPolicy: Always
+    tag: "latest"
+  frontend:
+    repository: localhost:5001/dictaphone-frontend-generic
+    pullPolicy: Always
+    tag: "latest"
+  audioExtractor:
+    repository: localhost:5001/dictaphone-audio-extractor
+    pullPolicy: Always
+    tag: "latest"
 
 backend:
+  # Allow Tilt live updates to write synced files using the image user.
+  securityContext: null
   replicas: 1
   envVars:
     DJANGO_CSRF_TRUSTED_ORIGINS: https://dictaphone.127.0.0.1.nip.io,http://dictaphone.127.0.0.1.nip.io
     DJANGO_CONFIGURATION: Production
+    # Tilt: permit local garage bucket in regards to meet summary integration.
+    EXTERNAL_SOURCE_REQUIRE_HTTPS: "False"
+    EXTERNAL_SOURCE_ALLOWED_URL_PREFIXES: '["http://dev-backend-garage.meet.svc.cluster.local:9000/meet-media-storage/"]'
     DJANGO_ALLOWED_HOSTS: dictaphone.127.0.0.1.nip.io,dictaphone-backend.dictaphone.svc.cluster.local
     DJANGO_SECRET_KEY: {{ .Values.djangoSecretKey }}
     SIMPLE_JWT_SIGNING_KEY: {{ .Values.simpleJwtSigningKey }}
+    AI_SERVICE_API_KEY: {{ .Values.aiServiceApiKey | quote }}
+    AI_WEBHOOK_API_KEY: {{ .Values.aiWebhookApiKey | quote }}
     DJANGO_SETTINGS_MODULE: dictaphone.settings
     DJANGO_SILENCED_SYSTEM_CHECKS: security.W004, security.W008
-    DJANGO_SUPERUSER_PASSWORD: admin
+    DJANGO_SUPERUSER_EMAIL: admin@example.com
+    DJANGO_SUPERUSER_PASSWORD: {{ .Values.djangoSuperuserPassword | quote }}
     DJANGO_EMAIL_HOST: "mailcatcher"
     DJANGO_EMAIL_PORT: 1025
     DJANGO_EMAIL_USE_SSL: "False"
@@ -30,7 +47,8 @@ backend:
     OIDC_RP_CLIENT_ID: dictaphone
     OIDC_RP_CLIENT_SECRET: ThisIsAnExampleKeyForDevPurposeOnly
     OIDC_RP_SIGN_ALGO: RS256
-    OIDC_RP_SCOPES: "openid email"
+    OIDC_RP_SCOPES: "openid email roles"
+    OIDC_ALLOWED_ROLES: priviledged_user
     OIDC_REDIRECT_ALLOWED_HOSTS: https://dictaphone.127.0.0.1.nip.io
     OIDC_AUTH_REQUEST_EXTRA_PARAMS: "{'acr_values': 'eidas1'}"
     # valid value just for dev, we should not store this here but it's technically ok for now
@@ -47,15 +65,22 @@ backend:
     STORAGES_STATICFILES_BACKEND: django.contrib.staticfiles.storage.StaticFilesStorage
     FRONTEND_SUPPORT: "{'id': '58ea6697-8eba-4492-bc59-ad6562585041', 'help_article_transcript': 'https://lasuite.crisp.help/fr/article/visio-transcript-1sjq43x', 'help_article_recording': 'https://lasuite.crisp.help/fr/article/visio-enregistrement-wgc8o0', 'help_article_more_tools': 'https://lasuite.crisp.help/fr/article/visio-tools-bvxj23'}"
     FRONTEND_FEEDBACK: "{'url': 'https://grist.numerique.gouv.fr/o/docs/cbMv4G7pLY3Z/USER-RESEARCH-or-LA-SUITE/f/26'}"
-    AWS_S3_ENDPOINT_URL: http://minio.dictaphone.svc.cluster.local:9000
-    AWS_S3_ACCESS_KEY_ID: dictaphone
-    AWS_S3_SECRET_ACCESS_KEY: password
-    AWS_STORAGE_BUCKET_NAME: dictaphone-media-storage
-    AWS_S3_REGION_NAME: local
+    S3_DEFAULT_ACCESS_KEY_ID: dictaphone-default
+    S3_DEFAULT_SECRET_ACCESS_KEY: password-default
+    S3_DEFAULT_BUCKET_NAME: dictaphone-media-storage
+    S3_ALPHA_ACCESS_KEY_ID: dictaphone-alpha
+    S3_ALPHA_SECRET_ACCESS_KEY: password-alpha
+    S3_ALPHA_BUCKET_NAME: dictaphone-media-alpha
+    S3_BETA_ACCESS_KEY_ID: dictaphone-beta
+    S3_BETA_SECRET_ACCESS_KEY: password-beta
+    S3_BETA_BUCKET_NAME: dictaphone-media-beta
+    S3_ENDPOINT_URL: http://rustfs.dictaphone.svc.cluster.local:9000
+    S3_BUCKET_CONFIGURATIONS: '{"default":{"bucket_name_env":"S3_DEFAULT_BUCKET_NAME","access_key_id_env":"S3_DEFAULT_ACCESS_KEY_ID","secret_access_key_env":"S3_DEFAULT_SECRET_ACCESS_KEY","endpoint_url_env":"S3_ENDPOINT_URL","region_name":"local","signature_version":"s3v4","domain_replace":"https://rustfs-dictaphone.127.0.0.1.nip.io"},"alpha":{"bucket_name_env":"S3_ALPHA_BUCKET_NAME","access_key_id_env":"S3_ALPHA_ACCESS_KEY_ID","secret_access_key_env":"S3_ALPHA_SECRET_ACCESS_KEY","endpoint_url_env":"S3_ENDPOINT_URL","region_name":"local","signature_version":"s3v4","domain_replace":"https://rustfs-dictaphone.127.0.0.1.nip.io"},"beta":{"bucket_name_env":"S3_BETA_BUCKET_NAME","access_key_id_env":"S3_BETA_ACCESS_KEY_ID","secret_access_key_env":"S3_BETA_SECRET_ACCESS_KEY","endpoint_url_env":"S3_ENDPOINT_URL","region_name":"local","signature_version":"s3v4","domain_replace":"https://rustfs-dictaphone.127.0.0.1.nip.io"}}'
+    DATA_POLICY_CONFIGURATIONS: '{"default":{"default":True,"bucket":"default"},"alpha":{"domains":["alpha.example"],"bucket":"alpha","file_auto_hard_delete_after_days":14,"original_file_data_delete_after_days":7},"beta":{"domains":["beta.example"],"bucket":"beta","file_auto_hard_delete_after_days":30,"original_file_data_delete_after_days":14}}'
     MEDIA_BASE_URL: https://dictaphone.127.0.0.1.nip.io
-    AWS_S3_SIGNATURE_VERSION: s3v4
     SSL_CERT_FILE: /app/.venv/lib/python3.14/site-packages/certifi/cacert.pem
-    AWS_S3_DOMAIN_REPLACE: https://minio-dictaphone.127.0.0.1.nip.io
+    AUDIO_EXTRACTOR_TRANSCODING_TOKEN: {{ .Values.audioExtractorTranscodingToken | quote }}
+    AUDIO_EXTRACTOR_VALIDATION_TOKEN: {{ .Values.audioExtractorValidationToken | quote }}
     CELERY_ENABLED: "True"
     CELERY_BROKER_URL: redis://default:pass@redis-master:6379/1
     CELERY_RESULT_BACKEND: redis://default:pass@redis-master:6379/1
@@ -64,7 +89,6 @@ backend:
     DOCS_INTEGRATION_ENABLED: "True"
     DOCS_BASE_URL: "True"
     DOCS_BASE_URL: https://impress-staging.beta.numerique.gouv.fr/
-
 
   migrate:
     command:
@@ -86,7 +110,7 @@ backend:
       - "/bin/sh"
       - "-c"
       - |
-        python manage.py createsuperuser --email admin@example.com --password admin
+        python manage.py createsuperuser --email "$DJANGO_SUPERUSER_EMAIL" --password "$DJANGO_SUPERUSER_PASSWORD"
     restartPolicy: Never
 
   # Extra volume mounts to manage our local custom CA and avoid to set ssl_verify: false
@@ -104,7 +128,36 @@ backend:
         - key: cacert.pem
           path: cacert.pem
 
+celeryBackend:
+  # Allow Tilt live updates to write synced files using the image user.
+  securityContext: null
+  replicas: 1
+  command:
+    - "celery"
+    - "-A"
+    - "dictaphone.celery_app"
+    - "worker"
+    - "--loglevel=info"
+    - "--concurrency=1"
+    - "-Q"
+    - "dictaphone-backend"
+
+audioExtractor:
+  # Allow Tilt live updates to write synced files using the image user.
+  securityContext: null
+  podSecurityContext: null
+  transcodingReplicas: 1
+  validationReplicas: 1
+  envVars:
+    AUDIO_EXTRACTOR_API_URL: http://dictaphone-backend.dictaphone.svc.cluster.local/api/internal/v1.0
+  transcodingEnvVars:
+    AUDIO_EXTRACTOR_TOKEN: {{ .Values.audioExtractorTranscodingToken | quote }}
+  validationEnvVars:
+    AUDIO_EXTRACTOR_TOKEN: {{ .Values.audioExtractorValidationToken | quote }}
+
 frontend:
+  # Allow Tilt live updates to write synced files using the image user.
+  securityContext: null
   envVars:
     VITE_APP_TITLE: "Assistant Transcripts"
     VITE_PORT: 8080
@@ -113,12 +166,11 @@ frontend:
 
   replicas: 1
 
-  image:
-    repository: localhost:5001/dictaphone-frontend-generic
-    pullPolicy: Always
-    tag: "latest"
-
 ingress:
+  enabled: true
+  host: dictaphone.127.0.0.1.nip.io
+
+ingressPublic:
   enabled: true
   host: dictaphone.127.0.0.1.nip.io
 
@@ -134,15 +186,39 @@ posthog:
     enabled: false
 
 ingressMediaFiles:
-  enabled: true
-  host: dictaphone.127.0.0.1.nip.io
+  - name: default
+    serviceName: default
+    enabled: true
+    className: null
+    host: dictaphone.127.0.0.1.nip.io
+    path: /media/(.*)
+    hosts: []
+    tls:
+      secretName: null
+      enabled: true
+      additional: []
 
-  annotations:
-    nginx.ingress.kubernetes.io/auth-url: https://dictaphone.127.0.0.1.nip.io/api/v1.0/files/media-auth/
-    nginx.ingress.kubernetes.io/auth-response-headers: "Authorization, X-Amz-Date, X-Amz-Content-SHA256"
-    nginx.ingress.kubernetes.io/upstream-vhost: minio.dictaphone.svc.cluster.local:9000
-    nginx.ingress.kubernetes.io/rewrite-target: /dictaphone-media-storage/files/$1
+    annotations:
+      nginx.ingress.kubernetes.io/use-regex: "true"
+      nginx.ingress.kubernetes.io/auth-url: https://dictaphone.127.0.0.1.nip.io/api/v1.0/files/media-auth/
+      nginx.ingress.kubernetes.io/auth-response-headers: "Authorization, X-Amz-Date, X-Amz-Content-SHA256"
+      nginx.ingress.kubernetes.io/upstream-vhost: rustfs.dictaphone.svc.cluster.local:9000
+      nginx.ingress.kubernetes.io/rewrite-target: /$1
+      nginx.ingress.kubernetes.io/configuration-snippet: |
+        add_header Content-Security-Policy "default-src 'none'" always;
+        add_header Content-Disposition "attachment";
 
 serviceMediaFiles:
-  host: minio.dictaphone.svc.cluster.local
-  port: 9000
+  - name: default
+    host: rustfs.dictaphone.svc.cluster.local
+    port: 9000
+    annotations: {}
+
+s3Gateway:
+  # Allow Tilt live updates to write synced files using the image user.
+  securityContext: null
+  podSecurityContext: null
+  enabled: true
+  rules: [{"endpoint": "http://rustfs.dictaphone.svc.cluster.local:9000", "addressing_style": "path", "buckets": {"dictaphone-media-storage": {"GET": ["files/"], "PUT": ["files/"]}, "dictaphone-media-alpha": {"GET": ["files/"], "PUT": ["files/"]}, "dictaphone-media-beta": {"GET": ["files/"], "PUT": ["files/"]}}}, {"endpoint": "http://rustfs.dictaphone.svc.cluster.local:9000", "addressing_style": "virtual", "buckets": {"dictaphone-media-storage": {"GET": ["files/"], "PUT": ["files/"]}, "dictaphone-media-alpha": {"GET": ["files/"], "PUT": ["files/"]}, "dictaphone-media-beta": {"GET": ["files/"], "PUT": ["files/"]}}}]
+  envVars:
+    S3_GATEWAY_FORCE_HTTPS: false

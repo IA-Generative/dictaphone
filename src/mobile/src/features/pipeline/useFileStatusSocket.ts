@@ -84,9 +84,12 @@ export function useFileStatusSocket() {
           useRecordingsStore.getState().deleteRecording(recording.id)
         }, 4000)
       } else if (status && isTerminalFailure(status)) {
-        // Mark the local upload as failed so the existing 'failed' UX paths
-        // (retry button, etc.) still work — server message kept for context.
-        store.updateRecording(recording.id, { uploadingStatus: 'failed' })
+        // Block the recording so the row offers the Retry / Delete actions;
+        // the server message is kept and shown on the row.
+        store.updateRecording(recording.id, {
+          uploadingStatus: 'blocked',
+          uploadBlockedReason: 'validation',
+        })
       }
     }
 

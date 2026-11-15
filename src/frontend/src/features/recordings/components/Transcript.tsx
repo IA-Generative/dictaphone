@@ -1,3 +1,6 @@
+import { AiJobFailureAlert } from './AiJobFailureAlert'
+import { RateLimitNotice } from '@/features/ui/components/RateLimitNotice'
+import { isRateLimitError } from '@/api/rateLimits'
 import { useTranscript } from '@/features/ai-jobs/api/fetch.ts'
 import { Fragment, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
@@ -6,16 +9,24 @@ import {
   TranscriptViewSegment,
 } from '@/features/ai-jobs/utils/transcript.ts'
 import { ApiAiJob } from '@/features/ai-jobs/api/types.ts'
+import { ApiAudioExtractionState } from '@/features/files/api/types.ts'
 import { TranscriptSegment } from '@/features/recordings/components/TranscriptSegment.tsx'
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
+import { Badge, Spinner } from '@gouvfr-lasuite/ui-components'
+import { Skeleton } from '@/components/Skeleton'
+import { useFormattedProcessingDuration } from '@/features/ai-jobs/utils/useFormattedProcessingDuration'
 
 export function Transcript({
   lastAiJobTranscript,
+  hasAiJobs,
+  audioExtractionState,
   currentTime,
   seekTo,
   setTranscriptSegments,
 }: {
   lastAiJobTranscript: ApiAiJob | null
+  hasAiJobs: boolean
+  audioExtractionState: ApiAudioExtractionState
   currentTime: number
   seekTo: (time: number) => void
   setTranscriptSegments: (segments: TranscriptViewSegment[]) => void
@@ -78,29 +89,107 @@ export function Transcript({
     }
   }, [activeSegment?.id])
 
+  const formattedProcessingDurationRemaining =
+    useFormattedProcessingDuration(lastAiJobTranscript)
+  const isAudioExtractionPending =
+    !hasAiJobs &&
+    (audioExtractionState === 'pending_audio_extraction' ||
+      audioExtractionState === 'extracting_audio')
+
+  if (audioExtractionState === 'audio_extraction_failed') {
+    return (
+      <div
+        className="transcript-pending transcript-pending--audio-extraction"
+        role="alert"
+      >
+        <div className="transcript-pending__message">
+          <Badge type="danger">{t('audioExtraction.failed')}</Badge>
+          <p>{t('audioExtraction.failedDescription')}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (isAudioExtractionPending) {
+    return (
+      <div
+        className="transcript-pending transcript-pending--audio-extraction"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="transcript-pending__message">
+          <Spinner />
+          <p>
+            {t(
+              audioExtractionState === 'pending_audio_extraction'
+                ? 'audioExtraction.pending'
+                : 'audioExtraction.extracting'
+            )}
+          </p>
+          <p>{t('audioExtraction.transcriptPending')}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!lastAiJobTranscript || lastAiJobTranscript?.status === 'pending') {
+    return (
+      <div className="transcript-pending">
+        <div className="transcript-pending__skeletons">
+          <div className="transcript-pending__skeletons__row">
+            <Skeleton opacity={100} />
+            <Skeleton opacity={100} />
+          </div>
+          <Skeleton opacity={75} />
+          <Skeleton opacity={50} />
+        </div>
+        {formattedProcessingDurationRemaining ? (
+          <div className="transcript-pending__message" role="alert">
+            <img
+              width={32}
+              src="/assets/files/icons/pending-icon.svg"
+              aria-hidden={true}
+              alt={t('transcript.status.pending')}
+            />
+            <p>
+              <Trans
+                t={t}
+                i18nKey="transcript.status.processingLong"
+                values={{ value: formattedProcessingDurationRemaining }}
+              >
+                La transcription est en cours de génération et sera disponible
+                dans <strong>tbd</strong>.
+              </Trans>
+            </p>
+          </div>
+        ) : (
+          <Badge type="info">{t('transcript.status.pending')}</Badge>
+        )}
+      </div>
+    )
+  }
+
   return (
     <section
       className="recording-page__panel recording-page__panel--transcript"
       aria-label={t('transcript.title')}
     >
       {lastAiJobTranscript?.status === 'failed' && (
-        <div className="recording-page__state">
-          {t('transcript.status.failed')}
-        </div>
+        <AiJobFailureAlert job={lastAiJobTranscript} />
       )}
 
-      {lastAiJobTranscript?.status === 'pending' && (
-        <div className="recording-page__state">
-          {t('transcript.status.pending')}
-        </div>
+      {isRateLimitError(transcriptQ.error) && (
+        <RateLimitNotice
+          scope="aiResult"
+          onRetry={() => {
+            void transcriptQ.refetch()
+          }}
+        />
       )}
-
       {transcriptQ.data &&
         transcriptSegments.length === 0 &&
         lastAiJobTranscript?.status === 'success' && (
-          <div className="recording-page__state">
-            {t('transcript.status.empty')}
-          </div>
+          <Badge type="warning">{t('transcript.status.empty')}</Badge>
         )}
 
       {transcriptSegments.length > 0 && (

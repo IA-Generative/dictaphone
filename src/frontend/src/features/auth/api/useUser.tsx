@@ -2,7 +2,9 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { keys } from '@/api/queryKeys'
 import { fetchUser } from './fetchUser'
 import { type ApiUser } from './ApiUser'
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { clearRateLimits } from '@/api/rateLimits'
+import { useLocalRecordingsStore } from '@/features/recordings/store/useLocalRecordingsStore'
 import { logoutUrl } from '../utils/logoutUrl'
 import { useConfig } from '@/api/useConfig'
 import { updateUserPreferences } from '@/features/auth/api/updateUserPreferences'
@@ -50,36 +52,57 @@ export const useUser = (
     return opts.fetchUserOptions
   }, [opts, isConfigLoading])
 
+  const queryKey = [keys.user, options]
   const query = useQuery({
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps
-    queryKey: [keys.user],
+    queryKey,
     queryFn: () => fetchUser(options),
     staleTime: Infinity,
     enabled: !isConfigLoading,
   })
 
-  const updateUserQuery = useMutation({
+  const previousUserId = useRef<string | false | undefined>(undefined)
+
+  useEffect(() => {
+    if (query.status !== 'success') return
+
+    const currentUserId = query.data === false ? false : query.data.id
+    if (previousUserId.current === undefined) {
+      previousUserId.current = currentUserId
+      return
+    }
+
+    if (previousUserId.current !== currentUserId) {
+      previousUserId.current = currentUserId
+      useLocalRecordingsStore.getState().clearFinalizationCheckpoints()
+      clearRateLimits()
+      void queryClient.refetchQueries({ queryKey: [keys.config] })
+    }
+  }, [query.data, query.status])
+
+  const { mutate: updateUserMutation } = useMutation({
     mutationFn: updateUserPreferences,
     onSuccess: (data) => {
-      queryClient.setQueryData([keys.user], data)
+      queryClient.setQueryData(queryKey, data)
     },
   })
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const updateUser = (
-    newData: Partial<Pick<ApiUser, 'language' | 'flag_show_mobile_app_popup'>>
-  ) => {
-    if (!query.data) return
+  const updateUser = useCallback(
+    (
+      newData: Partial<Pick<ApiUser, 'language' | 'flag_show_mobile_app_popup'>>
+    ) => {
+      if (!query.data) return
 
-    const currentUser = query.data as ApiUser
-    updateUserQuery.mutate({
-      user: {
-        id: currentUser.id,
-        timezone: currentUser.timezone,
-        ...newData,
-      },
-    })
-  }
+      const currentUser = query.data as ApiUser
+      updateUserMutation({
+        user: {
+          id: currentUser.id,
+          timezone: currentUser.timezone,
+          ...newData,
+        },
+      })
+    },
+    [query.data, updateUserMutation]
+  )
 
   useEffect(() => {
     if (query?.data) {

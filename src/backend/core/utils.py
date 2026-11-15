@@ -7,21 +7,108 @@ Utils functions used in the core app
 import logging
 import mimetypes
 import string
+from datetime import datetime, timedelta
+from functools import lru_cache
+from hashlib import sha256
+from threading import Lock
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
-from django.core.files.storage import default_storage
+from django.db import connection
 
 import boto3
 import botocore
 import magic
 
+from core.configuration import register_configuration_cache_clearer
+from core.storage import (
+    get_bucket_configuration_for_file,
+    get_storage_bucket_name,
+    get_storage_for_file,
+)
 from core.webhook_models import WhisperXResponse
 
 logger = logging.getLogger(__name__)
 
+MAX_TRANSCRIPT_PARAGRAPH_DURATION = 60
 
-def generate_s3_authorization_headers(key):
+_s3_client_cache_lock = Lock()
+
+
+def acquire_transaction_lock(key: str) -> None:
+    """Acquire an advisory lock until the caller's transaction ends.
+
+    Call within transaction.atomic() and use a namespaced key shared by all
+    callers that must serialize the same operation.
+    """
+    lock_key = int.from_bytes(sha256(key.encode()).digest()[:8], signed=True)
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [lock_key])
+
+
+@lru_cache(maxsize=32)
+def _create_cached_s3_client(
+    access_key_id: str,
+    secret_access_key: str,
+    endpoint_url: str,
+    region_name: str | None,
+    signature_version: str,
+):
+    """Create an S3 client for one complete set of connection parameters."""
+    session = boto3.session.Session(
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+        region_name=region_name,
+    )
+    return session.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        config=botocore.client.Config(signature_version=signature_version),
+    )
+
+
+def _get_cached_s3_client(
+    access_key_id: str,
+    secret_access_key: str,
+    endpoint_url: str,
+    region_name: str | None,
+    signature_version: str,
+):
+    """Return a cached S3 client, serializing first creation per cache."""
+    with _s3_client_cache_lock:
+        return _create_cached_s3_client(
+            access_key_id,
+            secret_access_key,
+            endpoint_url,
+            region_name,
+            signature_version,
+        )
+
+
+def clear_s3_client_cache() -> None:
+    """Clear clients created for domain-overridden S3 endpoints."""
+    with _s3_client_cache_lock:
+        _create_cached_s3_client.cache_clear()
+
+
+register_configuration_cache_clearer(clear_s3_client_cache)
+
+
+def _get_s3_client(file, storage, *, override_domain: bool, key=None):
+    """Return an S3 client using the file's bucket credentials."""
+    configuration = get_bucket_configuration_for_file(file, key=key)
+    if configuration.domain_replace and override_domain:
+        return _get_cached_s3_client(
+            configuration.access_key_id.get_secret_value(),
+            configuration.secret_access_key.get_secret_value(),
+            configuration.domain_replace,
+            configuration.region_name,
+            configuration.signature_version,
+        )
+    return storage.connection.meta.client
+
+
+def generate_s3_authorization_headers(file, key):
     """
     Generate authorization headers for an s3 object.
     These headers can be used as an alternative to signed urls with many benefits:
@@ -32,15 +119,17 @@ def generate_s3_authorization_headers(key):
     - the object storage service does not need to be exposed on internet
     """
 
-    url = default_storage.unsigned_connection.meta.client.generate_presigned_url(
+    storage = get_storage_for_file(file, key=key)
+    bucket_name = get_storage_bucket_name(storage)
+    url = storage.unsigned_connection.meta.client.generate_presigned_url(
         "get_object",
         ExpiresIn=0,
-        Params={"Bucket": default_storage.bucket_name, "Key": key},
+        Params={"Bucket": bucket_name, "Key": key},
     )
 
     request = botocore.awsrequest.AWSRequest(method="get", url=url)
 
-    s3_client = default_storage.connection.meta.client
+    s3_client = storage.connection.meta.client
     # pylint: disable=protected-access
     credentials = s3_client._request_signer._credentials  # noqa: SLF001
     frozen_credentials = credentials.get_frozen_credentials()
@@ -126,45 +215,45 @@ def generate_upload_policy(file):
         Originally taken from https://github.com/suitenumerique/drive/blob/564822d31f071c6dfacd112ef4b7146c73077cd9/src/backend/core/api/utils.py#L102  # pylint: disable=line-too-long
     """
 
-    key = file.file_key
+    key = file.temporary_file_key
+    storage = get_storage_for_file(file, key=key)
+    bucket_name = get_storage_bucket_name(storage)
+    configuration = get_bucket_configuration_for_file(file, key=key)
 
-    # This settings should be used if the backend application and the frontend application
+    # This setting should be used if the backend application and the frontend application
     # can't connect to the object storage with the same domain. This is the case in the
     # docker compose stack used in development. The frontend application will use localhost
     # to connect to the object storage while the backend application will use the object storage
     # service name declared in the docker compose stack.
     # This is needed because the domain name is used to compute the signature. So it can't be
     # changed dynamically by the frontend application.
-    if settings.AWS_S3_DOMAIN_REPLACE:
-        s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=settings.AWS_S3_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_S3_SECRET_ACCESS_KEY,
-            endpoint_url=settings.AWS_S3_DOMAIN_REPLACE,
-            config=botocore.client.Config(
-                region_name=settings.AWS_S3_REGION_NAME,
-                signature_version=settings.AWS_S3_SIGNATURE_VERSION,
-            ),
-        )
-    else:
-        s3_client = default_storage.connection.meta.client
+    s3_client = _get_s3_client(file, storage, override_domain=True, key=key)
+
+    params = {"Bucket": bucket_name, "Key": key}
+
+    if configuration.upload_acl is not None:
+        params["ACL"] = configuration.upload_acl
 
     # Generate the policy
     policy = s3_client.generate_presigned_url(
         ClientMethod="put_object",
-        Params={"Bucket": default_storage.bucket_name, "Key": key, "ACL": "private"},
+        Params=params,
         ExpiresIn=settings.AWS_S3_UPLOAD_POLICY_EXPIRATION,
     )
 
     return policy
 
 
-def generate_download_file_url(file, *, expires_in: int, override_domain: bool = True):
+def generate_download_file_url(
+    file, *, expires_in: int, override_domain: bool = True, key=None
+):
     """
     Generate a S3 signed download url for a given file.
     """
 
-    key = file.file_key
+    key = key or file.file_key
+    storage = get_storage_for_file(file, key=key)
+    bucket_name = get_storage_bucket_name(storage)
 
     # This settings should be used if the backend application and the frontend application
     # can't connect to the object storage with the same domain. This is the case in the
@@ -173,23 +262,16 @@ def generate_download_file_url(file, *, expires_in: int, override_domain: bool =
     # service name declared in the docker compose stack.
     # This is needed because the domain name is used to compute the signature. So it can't be
     # changed dynamically by the frontend application.
-    if settings.AWS_S3_DOMAIN_REPLACE and override_domain:
-        s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=settings.AWS_S3_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_S3_SECRET_ACCESS_KEY,
-            endpoint_url=settings.AWS_S3_DOMAIN_REPLACE,
-            config=botocore.client.Config(
-                region_name=settings.AWS_S3_REGION_NAME,
-                signature_version=settings.AWS_S3_SIGNATURE_VERSION,
-            ),
-        )
-    else:
-        s3_client = default_storage.connection.meta.client
+    s3_client = _get_s3_client(
+        file,
+        storage,
+        override_domain=override_domain,
+        key=key,
+    )
 
     return s3_client.generate_presigned_url(
         ClientMethod="get_object",
-        Params={"Bucket": default_storage.bucket_name, "Key": key},
+        Params={"Bucket": bucket_name, "Key": key},
         ExpiresIn=expires_in,
     )
 
@@ -230,32 +312,58 @@ def format_transcript_for_markdown(
     transcript: WhisperXResponse, language: str = "en"
 ) -> str:
     """
-    Format a transcript from whisperX to markdown.
+    Format WhisperX segments with the same paragraph grouping as the clients.
+
+    Merge consecutive segments from the same speaker while the paragraph spans
+    at most 60 seconds. Keep individual segments intact, even when longer.
     """
     # A bit hacky i18n handling
     is_french = language.lower().startswith("fr")
     speaker_label = "Participant" if is_french else "Speaker"
-    out_str = "# Transcript\n"
+    paragraphs = []
+    for chunk in transcript.segments:
+        if paragraphs:
+            first_chunk = paragraphs[-1][0]
+            paragraph_start = first_chunk.start if first_chunk.start is not None else 0
+            chunk_end = chunk.end if chunk.end is not None else chunk.start
+            chunk_end = chunk_end if chunk_end is not None else 0
+            if (
+                chunk.speaker == first_chunk.speaker
+                and chunk_end - paragraph_start <= MAX_TRANSCRIPT_PARAGRAPH_DURATION
+            ):
+                paragraphs[-1].append(chunk)
+                continue
+        paragraphs.append([chunk])
 
     speaker_number_by_id = {}
-
-    last_speaker_number = None
-    for chunk in transcript.segments:
-        speaker = chunk.speaker
+    blocks = ["# Transcript"]
+    for paragraph in paragraphs:
+        first_chunk = paragraph[0]
+        speaker = first_chunk.speaker
         if speaker not in speaker_number_by_id:
             speaker_number_by_id[speaker] = len(speaker_number_by_id) + 1
-
         speaker_number = speaker_number_by_id[speaker]
-        if speaker_number != last_speaker_number:
-            out_str += "\n**"
-            if chunk.start is not None:
-                out_str += format_duration(chunk.start) + " · "
-                out_str += speaker_label + f" {speaker_number}**\n"
-            last_speaker_number = speaker_number
+        timestamp = format_duration(max(0, first_chunk.start or 0))
+        text = " ".join(chunk.text.strip() for chunk in paragraph)
+        blocks.append(f"**{timestamp} · {speaker_label} {speaker_number}** {text}")
 
-        out_str += f"{chunk.text}\n"
+    return "\n\n".join(blocks).strip()
 
-    return out_str
+
+def redact_url(url):
+    """Keep the source identifiable without logging query or user credentials."""
+    if not isinstance(url, str):
+        return "[redacted]"
+    # Remove query and fragment before parsing, including for malformed URLs.
+    base, has_query, _ = url.partition("?")
+    base = base.partition("#")[0]
+    try:
+        parts = urlsplit(base)
+    except ValueError:
+        return "[redacted]"
+    authority = parts.netloc.rsplit("@", 1)[-1]
+    redacted = urlunsplit(parts._replace(netloc=authority))
+    return redacted + ("?[redacted]" if has_query else "")
 
 
 def update_url_query_params(url: str, query_parameters: dict[str, list[str]]) -> str:
@@ -273,3 +381,27 @@ def update_url_query_params(url: str, query_parameters: dict[str, list[str]]) ->
             parsed_url.fragment,
         )
     )
+
+
+def floor_dt_to_bucket(
+    dt: datetime, bucket_seconds: int, *, reference_dt: datetime | None = None
+) -> datetime:
+    """
+    Floor a datetime to a relative bucket start anchored to ``reference_dt``.
+
+    Buckets are anchored on execution time:
+    - first bucket: ``[reference_dt - bucket_seconds, reference_dt]``
+    - second bucket: ``[reference_dt - 2 * bucket_seconds, reference_dt - bucket_seconds)``
+    """
+    if reference_dt is None:
+        reference_dt = datetime.now(tz=dt.tzinfo)
+
+    delta_us = int((dt - reference_dt).total_seconds() * 1_000_000)
+    bucket_us = bucket_seconds * 1_000_000
+
+    if delta_us == 0:
+        bucket_start_offset_us = -bucket_us
+    else:
+        bucket_start_offset_us = (delta_us // bucket_us) * bucket_us
+
+    return reference_dt + timedelta(microseconds=bucket_start_offset_us)

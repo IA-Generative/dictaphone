@@ -1,3 +1,5 @@
+import { areUploadsPaused, isRateLimitError } from '@/api/rateLimits'
+import { ApiError } from '@/api/ApiError'
 import { keys } from '@/api/queryKeys.ts'
 import { queryClient } from '@/api/queryClient.ts'
 import {
@@ -49,36 +51,57 @@ const uploadRecording = async (recordingId: string) => {
 
     storeState.updateRecording(recordingId, {
       status: 'uploading',
-      uploadProgress: 0,
+      uploadProgress: recording.finalizationFileId ? 100 : 0,
       uploadError: null,
     })
 
     await ensureStorageReady()
 
-    const pendingFile = await createPendingAudioFile({
-      filename: recording.filename,
-      durationSeconds: Math.max(0, recording.durationMs / 1000),
-      createdAt: new Date(recording.createdAt).toISOString(),
-    })
+    let fileId = recording.finalizationFileId
+    if (!fileId) {
+      const pendingFile = await createPendingAudioFile({
+        filename: recording.filename,
+        durationSeconds: Math.max(0, recording.durationMs / 1000),
+        createdAt: new Date(recording.createdAt).toISOString(),
+        source: recording.source,
+        language: recording.language,
+      })
 
-    await uploadManager.uploadRecording({
-      recordingId,
-      url: pendingFile.policy,
-      method: 'PUT',
-      totalBytes: recording.totalBytes,
-      contentType: recording.mimeType || 'audio/webm',
-      headers: {
-        'X-amz-acl': 'private',
-      },
-      onProgress: (progress) => {
-        useLocalRecordingsStore.getState().updateRecording(recordingId, {
-          status: 'uploading',
-          uploadProgress: progress.percent,
-          uploadError: null,
-        })
-      },
-    })
-    await markUploadEnded(pendingFile.id)
+      await uploadManager.uploadRecording({
+        recordingId,
+        url: pendingFile.policy,
+        method: 'PUT',
+        totalBytes: recording.totalBytes,
+        contentType: recording.mimeType || 'audio/webm',
+        headers:
+          pendingFile.acl === null
+            ? {}
+            : {
+                'X-amz-acl': pendingFile.acl ?? 'private',
+              },
+        onProgress: (progress) => {
+          useLocalRecordingsStore.getState().updateRecording(recordingId, {
+            status: 'uploading',
+            uploadProgress: progress.percent,
+            uploadError: null,
+          })
+        },
+      })
+      fileId = pendingFile.id
+      useLocalRecordingsStore
+        .getState()
+        .updateRecording(recordingId, { finalizationFileId: fileId })
+    }
+    try {
+      await markUploadEnded(fileId)
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 404) {
+        useLocalRecordingsStore
+          .getState()
+          .updateRecording(recordingId, { finalizationFileId: undefined })
+      }
+      throw error
+    }
 
     await chunkStore.clearRecording(recordingId)
     useLocalRecordingsStore.getState().removeRecording(recordingId)
@@ -86,13 +109,17 @@ const uploadRecording = async (recordingId: string) => {
       queryKey: [keys.files],
     })
   } catch (error) {
-    const aborted = error instanceof DOMException && error.name === 'AbortError'
+    // Rate-limited uploads go back to the queue, which is paused until the user resumes.
+    const requeue =
+      isRateLimitError(error) ||
+      (error instanceof DOMException && error.name === 'AbortError')
     useLocalRecordingsStore.getState().updateRecording(recordingId, {
-      status: aborted ? 'stopped' : 'upload_failed',
-      uploadError: aborted || !(error instanceof Error) ? null : error.message,
+      status: requeue ? 'stopped' : 'upload_failed',
+      uploadError: requeue || !(error instanceof Error) ? null : error.message,
     })
   } finally {
     uploadsInProgress.delete(recordingId)
+    checkUploads()
   }
 }
 
@@ -129,6 +156,7 @@ type LocalRecordingsState = {
   getRecordingById: (recordingId: string) => StoredRecording | null
   getAllRecordings: () => StoredRecording[]
   requestUpload: (recordingId: string) => Promise<void>
+  clearFinalizationCheckpoints: () => void
 }
 
 export const useLocalRecordingsStore = create<LocalRecordingsState>()(
@@ -172,6 +200,15 @@ export const useLocalRecordingsStore = create<LocalRecordingsState>()(
       getRecordingById: (recordingId) =>
         get().recordingsById[recordingId] ?? null,
       getAllRecordings: () => Object.values(get().recordingsById),
+      clearFinalizationCheckpoints: () =>
+        set((state) => ({
+          recordingsById: Object.fromEntries(
+            Object.entries(state.recordingsById).map(([id, recording]) => [
+              id,
+              { ...recording, finalizationFileId: undefined },
+            ])
+          ),
+        })),
       requestUpload: async (recordingId) => {
         const recording = get().recordingsById[recordingId]
         if (
@@ -179,7 +216,8 @@ export const useLocalRecordingsStore = create<LocalRecordingsState>()(
           recording.chunkCount <= 0 ||
           recording.status === 'uploading' ||
           recording.status === 'recording' ||
-          recording.status === 'paused'
+          recording.status === 'paused' ||
+          areUploadsPaused()
         ) {
           return
         }
@@ -195,31 +233,43 @@ export const useLocalRecordingsStore = create<LocalRecordingsState>()(
       partialize: (state) => ({
         recordingsById: state.recordingsById,
       }),
-      onRehydrateStorage: () => (state, error) => {
-        if (error || !state) return
-
-        state.recordingsById = Object.fromEntries(
-          Object.entries(state.recordingsById)
+      // localStorage hydrates synchronously, before the store variable and upload
+      // subscription exist. Recover during the merge without referencing either.
+      merge: (persistedState, currentState) => {
+        const saved = persistedState as
+          | Partial<LocalRecordingsState>
+          | undefined
+        const recordingsById = Object.fromEntries(
+          Object.entries(saved?.recordingsById ?? {})
             .filter(([, recording]) => recording.chunkCount > 0)
-            .map(([id, recording]) => [
-              id,
-              {
-                ...recording,
-                status:
-                  recording.status === 'recording' ||
-                  recording.status === 'uploading' ||
-                  recording.status === 'paused'
-                    ? 'exited'
-                    : recording.status,
-              },
-            ])
+            .map(([id, recording]) => {
+              const interrupted =
+                recording.status === 'recording' ||
+                recording.status === 'uploading' ||
+                recording.status === 'paused' ||
+                recording.status === 'stopped'
+              return [
+                id,
+                {
+                  ...recording,
+                  ...(interrupted && {
+                    status: 'exited' as const,
+                    uploadProgress: recording.finalizationFileId ? 100 : 0,
+                    uploadError: null,
+                  }),
+                  language: recording.language ?? 'fr',
+                },
+              ]
+            })
         )
+        return { ...currentState, recordingsById }
       },
     }
   )
 )
 
 function checkUploads() {
+  if (areUploadsPaused()) return
   const recordings = Object.values(
     useLocalRecordingsStore.getState().recordingsById
   )
@@ -244,3 +294,6 @@ useLocalRecordingsStore.subscribe((newState, prevState) => {
     checkUploads()
   }
 })
+
+/** Called only by an explicit user action after the upload cooldown. */
+export const resumeLocalUploads = checkUploads

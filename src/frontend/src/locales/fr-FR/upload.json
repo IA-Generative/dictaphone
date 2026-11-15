@@ -12,12 +12,16 @@
     "unsupportedExtension": "Extension non supportée : {{extension}}",
     "tooLarge": "Taille maximale dépassée : {{value}}",
     "tooLong": "La durée audio ({{duration, formatDuration}}) dépasse la limite ({{maxDuration, formatDuration}}).",
+    "unrecognizedAudio": "Fichier audio non reconnu, il est peut-être corrompu. Vous pouvez essayer de le convertir en ogg d'abord (avec ffmpeg par exemple).",
     "uploadFailed": "Le transfert a échoué"
   },
   "uploader": {
     "toast": "Déposez vos fichiers ici pour les transférer",
     "steps": {
-      "preparing": "Préparation du transfert..."
+      "preparing": "Préparation du transfert...",
+      "none": "Aucun fichier sélectionné pour le transfert",
+      "upload_files": "Transferts en cours",
+      "done": "Terminé"
     },
     "files": {
       "description_one": "{{count}} fichier en cours de transfert",
@@ -25,5 +29,18 @@
       "description_done_one": "{{count}} fichier transféré",
       "description_done_other": "{{count}} fichiers transférés"
     }
+  },
+  "fileLimit": {
+    "title": "Limite d’enregistrements atteinte",
+    "description": "Vous avez atteint {{limit}} enregistrements. Supprimez-en pour en envoyer d’autres.",
+    "manageRecordings": "Gérer mes enregistrements"
+  },
+  "rateLimit": {
+    "title": "Envois en pause",
+    "resume": "Reprendre les imports",
+    "paused": "Envois en pause",
+    "keepOpen": "Gardez l’application ouverte jusqu’à la fin des envois. Après rechargement, sélectionnez à nouveau les fichiers restants.",
+    "saved": "Votre enregistrement est conservé sur cet appareil.",
+    "finalizing": "Audio envoyé ; en attente de finalisation de l’import."
   }
 }

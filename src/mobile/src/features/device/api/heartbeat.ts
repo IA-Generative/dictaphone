@@ -1,8 +1,5 @@
 import { API_URL } from '@/api/constants'
-import {
-  getDeviceToken,
-  setDeviceToken,
-} from '@/services/deviceTokenService'
+import { getDeviceToken, setDeviceToken } from '@/services/deviceTokenService'
 
 type HeartbeatResponse = {
   valid?: boolean
@@ -27,9 +24,7 @@ export async function deviceHeartbeat(): Promise<HeartbeatResponse | null> {
   }
   if (!response.ok) return null
 
-  const data = (await response
-    .json()
-    .catch(() => ({}))) as HeartbeatResponse
+  const data = (await response.json().catch(() => ({}))) as HeartbeatResponse
   if (data.refreshed_device_token) {
     await setDeviceToken(data.refreshed_device_token)
   }

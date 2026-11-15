@@ -1,13 +1,24 @@
+import { useUploadsPaused } from '@/api/rateLimits'
 import {
   createLocalFileFromChunkStore,
   useLocalRecordingsStore,
 } from '@/features/recordings/store/useLocalRecordingsStore.ts'
-import { Button } from '@gouvfr-lasuite/cunningham-react'
+import { Button, Tooltip } from '@gouvfr-lasuite/ui-components'
 import { intervalToDuration } from 'date-fns'
-import { useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Retry, Spinner, Trash } from '@gouvfr-lasuite/ui-kit'
-import { ProgressBar } from '@/components/ProgressBar'
+import {
+  DropdownMenu,
+  HorizontalSeparator,
+  Spinner,
+} from '@gouvfr-lasuite/ui-components'
+import {
+  Download,
+  Retry,
+  Trash,
+  Warning,
+} from '@gouvfr-lasuite/ui-components/icons'
+import { CircularProgress } from '@/features/ui/components/circular-progress/CircularProgress'
 
 const downloadFile = (file: File) => {
   const objectUrl = URL.createObjectURL(file)
@@ -23,8 +34,10 @@ const downloadFile = (file: File) => {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10000)
 }
 
-export function RecoverList() {
-  const { t } = useTranslation(['recordings', 'shared'])
+export function RecoverList({ addEndSeparator }: { addEndSeparator: boolean }) {
+  const { t } = useTranslation(['recordings', 'shared', 'upload'])
+  const uploadsPaused = useUploadsPaused()
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null)
   const recordingsById = useLocalRecordingsStore(
     (state) => state.recordingsById
   )
@@ -53,149 +66,188 @@ export function RecoverList() {
       aria-label={t('recordings:localQueue.title')}
     >
       <div className="recordings-recovery-alert__list" role="list">
-        {queuedRecordings.map((recording) => {
+        {queuedRecordings.map((recording, recordingIdx) => {
           const isUploading = recording.status === 'uploading'
-          const isPendingUpload = isUploading || recording.status === 'stopped'
+          const isPaused = uploadsPaused && recording.status === 'stopped'
+          const isPendingUpload =
+            isUploading || (recording.status === 'stopped' && !isPaused)
           const isFailed =
+            isPaused ||
             recording.status === 'upload_failed' ||
             recording.status === 'exited'
 
-          const badgeLabel =
-            recording.status === 'upload_failed'
-              ? t('recordings:localQueue.badges.failedToUpload')
+          const tooltipLabel = isPaused
+            ? t('upload:rateLimit.paused')
+            : recording.status === 'upload_failed'
+              ? t('recordings:localQueue.tooltip.failedToUpload')
               : recording.status === 'exited'
-                ? t('recordings:localQueue.badges.interrupted')
-                : t('recordings:localQueue.badges.local')
+                ? t('recordings:localQueue.tooltip.interrupted')
+                : 'Unknown error'
 
           return (
-            <article
-              key={recording.id}
-              className="recordings-recovery-alert__item"
-            >
-              <div className="recordings-recovery-alert__item-left">
-                <div className="recordings-recovery-alert__item-status">
-                  {isPendingUpload ? (
-                    <span
-                      role="status"
-                      aria-label={t(
-                        'recordings:transcript.statusPreview.pending'
-                      )}
-                    >
-                      <Spinner />
-                    </span>
-                  ) : (
-                    <span
-                      role="img"
-                      aria-label={t(
-                        'recordings:transcript.statusPreview.failed'
-                      )}
-                    >
-                      ⚠️
-                    </span>
+            <Fragment key={recording.id}>
+              {recordingIdx > 0 && <HorizontalSeparator withPadding={false} />}
+              <article
+                className="recordings-recovery-alert__item"
+                role="listitem"
+              >
+                <div className="recordings-recovery-alert__item-left">
+                  <div className="recordings-recovery-alert__item-status">
+                    {isUploading ? (
+                      <CircularProgress
+                        progress={recording.uploadProgress}
+                        status={'uploading'}
+                      />
+                    ) : isPendingUpload ? (
+                      <span
+                        role="status"
+                        aria-label={t(
+                          'recordings:transcript.statusPreview.pending'
+                        )}
+                      >
+                        <Spinner />
+                      </span>
+                    ) : (
+                      <Tooltip content={tooltipLabel}>
+                        <span
+                          role="img"
+                          aria-label={tooltipLabel}
+                          className="warning"
+                        >
+                          <Warning />
+                        </span>
+                      </Tooltip>
+                    )}
+                  </div>
+                  <div className="recordings-recovery-alert__item-info">
+                    <div className="recordings-recovery-alert__item-title-row">
+                      <span className="recordings-recovery-alert__item-title">
+                        {t('recordings:localQueue.recordingLabel', {
+                          value: recording.createdAt,
+                        })}
+                      </span>
+                    </div>
+                    {isPaused && (
+                      <p>
+                        {t('upload:rateLimit.paused')}{' '}
+                        {t('upload:rateLimit.saved')}
+                      </p>
+                    )}
+                    {isPaused && recording.finalizationFileId && (
+                      <p>{t('upload:rateLimit.finalizing')}</p>
+                    )}
+                    <div className="recordings-recovery-alert__item-meta">
+                      <span>
+                        {t('shared:utils.duration', {
+                          duration: intervalToDuration({
+                            start: 0,
+                            end: Math.max(recording.durationMs, 1000),
+                          }),
+                        })}
+                      </span>
+                      <span>•</span>
+                      <span>
+                        {t('shared:utils.formatDateTime', {
+                          value: recording.createdAt,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="recordings-recovery-alert__actions">
+                  {isFailed && (
+                    <>
+                      <Button
+                        size="small"
+                        variant="tertiary"
+                        color="neutral"
+                        disabled={isUploading || uploadsPaused}
+                        aria-label={t(
+                          'recordings:localQueue.actions.retryAriaLabel'
+                        )}
+                        onClick={() =>
+                          useLocalRecordingsStore
+                            .getState()
+                            .requestUpload(recording.id)
+                        }
+                        icon={<Retry size="small" />}
+                      >
+                        {t('recordings:localQueue.actions.retry')}
+                      </Button>
+                      <DropdownMenu
+                        isOpen={openDropdownId === recording.id}
+                        onOpenChange={(open) =>
+                          setOpenDropdownId(open ? recording.id : null)
+                        }
+                        options={[
+                          {
+                            label: t('recordings:localQueue.actions.download'),
+                            icon: <Download size="small" />,
+                            callback: () => {
+                              setOpenDropdownId(null)
+                              createLocalFileFromChunkStore(recording.id).then(
+                                downloadFile
+                              )
+                            },
+                          },
+                          {
+                            label: t('recordings:localQueue.actions.discard'),
+                            icon: <Trash size="small" />,
+                            callback: () => {
+                              const shouldDiscard = window.confirm(
+                                t('recordings:localQueue.confirmDiscard')
+                              )
+                              if (!shouldDiscard) {
+                                return
+                              }
+                              setOpenDropdownId(null)
+                              useLocalRecordingsStore
+                                .getState()
+                                .removeRecording(recording.id)
+                            },
+                          },
+                        ]}
+                      >
+                        <Button
+                          size="small"
+                          variant="tertiary"
+                          color="neutral"
+                          disabled={isUploading}
+                          onClick={() =>
+                            setOpenDropdownId(
+                              openDropdownId === recording.id
+                                ? null
+                                : recording.id
+                            )
+                          }
+                          aria-label={t('actions.moreOptionsAriaLabel', {
+                            title: t('recordings:localQueue.recordingLabel', {
+                              value: recording.createdAt,
+                            }),
+                          })}
+                          icon={
+                            <span
+                              className="material-icons more"
+                              aria-hidden="true"
+                            >
+                              more_horiz
+                            </span>
+                          }
+                        />
+                      </DropdownMenu>
+                    </>
                   )}
                 </div>
-                <div className="recordings-recovery-alert__item-info">
-                  <div className="recordings-recovery-alert__item-title-row">
-                    <span className="recordings-recovery-alert__item-title">
-                      {t('recordings:localQueue.recordingLabel', {
-                        value: recording.createdAt,
-                      })}
-                    </span>
-                    <span className="recordings-recovery-alert__badge">
-                      {badgeLabel}
-                    </span>
-                  </div>
-                  <div className="recordings-recovery-alert__item-meta">
-                    <span>
-                      {t('shared:utils.duration', {
-                        duration: intervalToDuration({
-                          start: 0,
-                          end: Math.max(recording.durationMs, 1000),
-                        }),
-                      })}
-                    </span>
-                    <span>•</span>
-                    <span>
-                      {t('shared:utils.formatDateTime', {
-                        value: recording.createdAt,
-                      })}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              {isUploading && (
-                <ProgressBar
-                  // We avoid showing 100% before it's fully done
-                  value={Math.min(recording.uploadProgress, 99)}
-                  minValue={0}
-                  maxValue={100}
-                />
-              )}
-              <div className="recordings-recovery-alert__actions">
-                {!isPendingUpload && (
-                  <Button
-                    color="neutral"
-                    variant="bordered"
-                    disabled={isUploading}
-                    size="small"
-                    aria-label={t('recordings:localQueue.actions.discard')}
-                    onClick={() => {
-                      const shouldDiscard = window.confirm(
-                        t('recordings:localQueue.confirmDiscard')
-                      )
-                      if (!shouldDiscard) {
-                        return
-                      }
-                      useLocalRecordingsStore
-                        .getState()
-                        .removeRecording(recording.id)
-                    }}
-                    icon={<Trash size="small" />}
-                  ></Button>
-                )}
-                {isFailed && (
-                  <Button
-                    color="neutral"
-                    variant="secondary"
-                    size="small"
-                    disabled={isUploading}
-                    onClick={async () => {
-                      const file = await createLocalFileFromChunkStore(
-                        recording.id
-                      )
-                      downloadFile(file)
-                    }}
-                    icon={<Download size="small" />}
-                  >
-                    {t('recordings:localQueue.actions.download')}
-                  </Button>
-                )}
-
-                {isFailed && (
-                  <Button
-                    color="brand"
-                    size="small"
-                    variant="secondary"
-                    disabled={isUploading}
-                    onClick={() =>
-                      useLocalRecordingsStore
-                        .getState()
-                        .requestUpload(recording.id)
-                    }
-                    icon={<Retry size="small" />}
-                  >
-                    {t(
-                      isFailed
-                        ? 'recordings:localQueue.actions.retry'
-                        : 'recordings:localQueue.actions.upload'
-                    )}
-                  </Button>
-                )}
-              </div>
-            </article>
+              </article>
+            </Fragment>
           )
         })}
       </div>
+      {addEndSeparator && (
+        <div className="recordings-recovery-alert__list__end-separator">
+          <HorizontalSeparator withPadding={false} />
+        </div>
+      )}
     </section>
   )
 }

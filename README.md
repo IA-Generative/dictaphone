@@ -10,6 +10,8 @@
 </p>
 
 <p align="center">
+  <a href="https://matrix.to/#/#dictaphone-official:matrix.org">Chat with us</a>
+  ·
   <a href="https://github.com/suitenumerique/dictaphone/blob/main/CHANGELOG.md">Changelog</a>
   ·
   <a href="https://github.com/suitenumerique/dictaphone/issues/new?assignees=&labels=bug&template=Bug_report.md">Bug reports</a>
@@ -39,6 +41,9 @@ _NB: The project codename and Python package name remain **Dictaphone**; GitHub 
 Note that the main processing pipeline is currently hosted under [La Suite Meet repository](https://github.com/suitenumerique/meet), under the [summary component](https://github.com/suitenumerique/meet/tree/main/src/summary). It is based on WhisperX.
 
 ## Self-host
+
+Upgrade procedures for existing deployments are in the
+[deployment migration guides](./docs/migrations/README.md).
 
 We use Kubernetes for our [production instance](https://transcripts.numerique.gouv.fr/) but also support Docker Compose. The complexity comes mostly from deploying the _summary_ component / WhisperX.
 

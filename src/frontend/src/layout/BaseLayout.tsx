@@ -3,28 +3,32 @@ import {
   LaGaufreV2,
   LanguagePicker,
   useResponsive,
-} from '@gouvfr-lasuite/ui-kit'
-import { Button } from '@gouvfr-lasuite/cunningham-react'
+} from '@gouvfr-lasuite/ui-components'
+import { Button } from '@gouvfr-lasuite/ui-components'
 import { authUrl } from '@/features/auth/utils/authUrl'
 import { useTranslation } from 'react-i18next'
 import { PropsWithChildren, useCallback, useMemo, useState } from 'react'
 import { LANGUAGES } from '@/layout/HeaderRight'
+import { usePageTitle } from '@/layout/usePageTitle'
 
 export function BaseLayout({
   children,
   className,
   showShowcaseAssistant,
-  title,
+  pageTitle,
+  heading,
 }: PropsWithChildren & {
   className?: string
   showShowcaseAssistant: boolean
-  title?: string
+  heading?: string
+  pageTitle: string
 }) {
   const { t, i18n } = useTranslation(['home', 'layout'])
   const [selectedLanguage, setSelectedLanguage] = useState<string>(
     i18n.language
   )
   const { isMobile } = useResponsive()
+  usePageTitle(pageTitle)
 
   const languages = useMemo(() => {
     return LANGUAGES.map((language) => ({
@@ -48,7 +52,7 @@ export function BaseLayout({
         <div className="base-layout__header__left">
           <a href="/">
             <img
-              alt={t('images.governmentLogoAlt')}
+              alt={t('layout:images.governmentLogoAlt')}
               className="base-layout__header__gouv-logo"
               src="/assets/gouv-logo.svg"
             />
@@ -83,12 +87,12 @@ export function BaseLayout({
       </div>
 
       <div className="base-layout__inner-container">
-        {title && <h1 className="base-layout__title">{title}</h1>}
+        {heading && <h1 className="base-layout__title">{heading}</h1>}
         <section className="base-layout__content">{children}</section>
         {showShowcaseAssistant && (
           <div className="base-layout__showcase-assistant">
             <img
-              alt={t('images.assistantLogoAlt')}
+              alt={t('layout:images.assistantLogoAlt')}
               src="/assets/logo-lasuite-assistant.svg"
             />
             <p>{t('introLasuiteAssistant')}</p>
@@ -97,10 +101,15 @@ export function BaseLayout({
                 variant="bordered"
                 href="https://assistant.numerique.gouv.fr/"
                 target="_blank"
+                aria-label={t('discoverAssistantAriaLabel')}
               >
                 {t('discoverAssistant')}
               </Button>
-              <Button href="https://lasuite.numerique.gouv.fr/" target="_blank">
+              <Button
+                href="https://lasuite.numerique.gouv.fr/"
+                target="_blank"
+                aria-label={t('discoverLaSuiteAriaLabel')}
+              >
                 {t('discoverLaSuite')}
               </Button>
             </div>

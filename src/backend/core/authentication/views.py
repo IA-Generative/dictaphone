@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -21,9 +21,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from core.authentication.backends import OIDCRegistrationRestricted
 from core.authentication.schemas import (
     PKCEAuthenticationRequestModel,
     PKCETokenExchangeModel,
+)
+from core.authentication.throttling import (
+    FailedRequestThrottleMixin,
+    PKCETokenExchangeThrottle,
 )
 from core.utils import update_url_query_params
 
@@ -124,10 +129,25 @@ class OIDCAuthenticationCallbackWithPkceView(OIDCAuthenticationCallbackView):
         and PKCE parameters, and redirects to the appropriate mobile deep link URL.
     """
 
+    def get(self, request):
+        """Send rejected signups to the frontend without creating an account."""
+        try:
+            return super().get(request)
+        except OIDCRegistrationRestricted:
+            # Use the configured frontend origin, including for mobile and silent
+            # login; the session's next URL must not bypass the restricted page.
+            frontend_url = self.get_settings("LOGIN_REDIRECT_URL_FAILURE", "/") or "/"
+            return HttpResponseRedirect(
+                urljoin(frontend_url, "/restricted?access_denied=1")
+            )
+
     def login_success(self):
         """Handles successful login callback."""
         res = super().login_success()
         if self.request.session.pop("pkce_oidc_response_type", None) != "code":
+            logger.info(
+                "PKCE response type not 'code', defaulting to usual login success response"
+            )
             return res
 
         pkce_data = self.request.session.pop("pkce_oidc_data", None)
@@ -153,14 +173,22 @@ class OIDCAuthenticationCallbackWithPkceView(OIDCAuthenticationCallbackView):
             )
             return self.login_failure()
 
+        logger.info(
+            "Mobile login successful, redirecting to mobile app for user %s",
+            self.user.pk,
+        )
         mobile_redirect = update_url_query_params(
             settings.MOBILE_DEEP_LINK_SCHEME,
             {"code": [authorization_code], "state": [pkce_data["state"]]},
         )
         return MobileFriendlyRedirect(mobile_redirect)
 
+    def login_failure(self):
+        logger.info("Login failed")
+        return super().login_failure()
 
-class PKCEOAuthTokenExchangeView(APIView):
+
+class PKCEOAuthTokenExchangeView(FailedRequestThrottleMixin, APIView):
     """
     Handles PKCE OAuth token exchange requests.
 
@@ -182,6 +210,8 @@ class PKCEOAuthTokenExchangeView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [PKCETokenExchangeThrottle]
+    # Audit logging for successful and failed token exchanges remains to be added.
 
     def post(self, request) -> Response:
         """Handles request for PKCE OAuth token exchange."""

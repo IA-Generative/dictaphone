@@ -2,14 +2,15 @@
   "home": "Home",
   "logout": "Log out",
   "recordCta": "Start recording",
+  "recordPageH1": "New recording",
   "images": {
     "governmentLogoAlt": "French government logo",
-    "appLogoAlt": "Transcripts logo",
+    "appLogoAlt": "Assistant Transcripts",
     "assistantLogoAlt": "LaSuite Assistant logo",
     "downloadIosAlt": "Download on the App Store",
     "downloadAndroidAlt": "Download on Google Play",
-    "downloadIosAriaLabel": "Download the iOS app on the App Store",
-    "downloadAndroidAriaLabel": "Download the Android app on Google Play"
+    "downloadIosAriaLabel": "Download the iOS app on the App Store (new window)",
+    "downloadAndroidAriaLabel": "Download the Android app on Google Play (new window)"
   },
   "breadcrumbs": {
     "myRecordings": "My recordings",
@@ -23,10 +24,15 @@
       "title": "Keep recording, anywhere",
       "description": "With the mobile app, your recording continues even when your screen is locked.",
       "scanToInstall": "Scan to install",
-      "catchPhrase": "Record your in-person meetings and automatically generates a structured report in Docs."
+      "catchPhrase": "Record your in-person meetings and automatically generates a structured report in Docs.",
+      "closePopupAriaLabel": "Close the mobile app download pop-up",
+      "openInTheAppStoreTitle": "Open in the App Store (new window)",
+      "openInThePlayStoreTitle": "Open in the Play Store (new window)",
+      "scanQRCodeAriaLabel": "QR code to scan to install the mobile app"
     },
     "help": {
-      "ariaLabel": "Help / Documentation",
+      "asideAriaLabel": "Help & Resources",
+      "ariaLabel": "Help & Resources",
       "documentation": "Documentation",
       "support": "Support",
       "mobileApp": "Mobile app",
@@ -44,5 +50,14 @@
     "accessibilityUrl": "/accessibility",
     "serviceProvisionAgreement": "Service provision agreement",
     "serviceProvisionAgreementUrl": "/service-provision-agreement"
+  },
+  "pageTitles": {
+    "downloadMobileApp": "Download mobile app",
+    "home": "Home",
+    "deletedRecordings": "Deleted recordings",
+    "record": "New recording",
+    "recordings": "My recordings",
+    "loading": "Loading...",
+    "recordingNotFound": "Recording not found"
   }
 }

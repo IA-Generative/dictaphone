@@ -1,0 +1,97 @@
+# App access control
+
+Set `OIDC_ALLOWED_ROLES=priviledged_user` to restrict processing to users with a
+matching role in the OIDC claim selected by `OIDC_ROLES_CLAIM` (default: `roles`).
+Use commas for multiple allowed roles; leave empty to allow everyone. Configure
+`OIDC_RP_SCOPES` with space-separated scopes, including any scope required by your
+provider to return roles.
+
+For a provider using a namespaced claim, configure for example:
+
+```env
+OIDC_RP_SCOPES="openid email provider_scope"
+OIDC_ROLES_CLAIM=provider:roles
+OIDC_ALLOWED_ROLES=priviledged_user
+```
+
+The claim name is a literal top-level UserInfo key, including any colon or dot;
+it is not a nested path. Only that claim is read, with no fallback to `roles`.
+Its value can be an array of strings or a whitespace-separated string. Missing
+or malformed values produce `unknown` access when the role policy is enabled;
+an empty array or string produces `restricted` access.
+
+When the role policy is enabled, new identities must have a matching role or an
+active email bypass before an account is created. If their access is restricted or unknown, the OIDC callback
+redirects to `/restricted` on the configured frontend origin without creating an
+account or issuing a mobile authorization code. This also applies to silent and
+mobile login flows.
+
+Existing users can still sign in, manage existing files, and read results,
+including when their roles have been revoked or are unknown.
+For restricted or unknown accounts, creating files/upload policies, finalizing
+uploads, and retrying AI jobs return HTTP 403. This does not end sessions or invalidate mobile JWTs. Previously issued
+storage upload policies work until expiry, but API finalization remains blocked.
+
+## Access status and exceptions
+
+`GET /api/v1.0/users/me/` returns HTTP 200 with two read-only fields:
+
+| `access_status` | Meaning | `is_restricted` |
+| --- | --- | --- |
+| `allowed` | Matching role, active email bypass, or role policy disabled | `false` |
+| `restricted` | Roles received, but none match (including an empty list) | `true` |
+| `unknown` | Role policy enabled, but no usable roles claim received | `true` |
+
+Existing users without stored roles have `unknown` status unless bypassed or the
+role policy is disabled. Both `restricted` and `unknown` block processing.
+
+Manage exceptions in Django admin under **Access bypass emails**. Matching ignores
+case and surrounding whitespace. Active entries with no expiry or a future expiry
+grant access; changes and expiration apply on the next API request.
+
+Roles and optional organization SIRET refresh on authentication, so provider role
+changes require reauthentication. Clients cannot edit stored roles or access status.
+
+For `unknown`, clients should offer reauthentication and fetch `/users/me/`
+afterward. Wait until recording, paused recording, and local saving/finalization
+have finished and audio is safely saved before logout, sign-in navigation, or user
+switching. Only the client can determine when this is safe. If roles remain
+missing, keep `unknown` without forcing repeated logins.
+
+## Local Keycloak development
+
+Docker Compose and `make start-tilt-keycloak` share `docker/auth/realm.json` and use:
+
+```env
+OIDC_ALLOWED_ROLES=priviledged_user
+OIDC_RP_SCOPES=openid email roles
+```
+
+The `dictaphone` client exposes realm roles as a flat `roles` array in UserInfo,
+ID tokens, and access tokens. Existing development and browser-test users have
+`priviledged_user`.
+
+To test restrictions, sign in with `user-restricted` / `password-restricted`
+(only the `user` role). Without an existing application account, expect a
+redirect to `/restricted` and no account creation. Add
+`restricted@dictaphone.world` to **Access bypass emails** to allow registration.
+For an existing account, sign-in succeeds with `restricted` status and HTTP 403
+for uploads and retries; an active bypass allows processing on the next request.
+
+### Existing installations
+
+For Compose, copy the settings above into the ignored `env.d/development/common`
+file and recreate the backend and worker containers.
+
+Keycloak imports only new realms. For an existing Compose or Tilt database, use
+the Keycloak admin console to:
+
+1. Create realm roles `user` and `priviledged_user`; assign `priviledged_user` to
+   existing development users.
+2. Add a **User Realm Role** mapper to the `dictaphone` client's dedicated scope:
+   claim name `roles`, JSON type `String`, multivalued enabled, included in
+   UserInfo, ID tokens, and access tokens.
+3. Create the restricted test user above with only `user`, and sign in again
+   after role changes.
+
+A fresh Keycloak database needs no manual setup.

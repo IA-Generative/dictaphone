@@ -1,0 +1,163 @@
+{{- define "dictaphone.audioExtractor.deployment" -}}
+{{- $root := index . 0 -}}
+{{- $mode := index . 1 -}}
+{{- $config := $root.Values.audioExtractor -}}
+{{- $modeVarsKey := printf "%sEnvVars" $mode -}}
+{{- $modeReplicasKey := printf "%sReplicas" $mode -}}
+{{- $timeout := dig "AUDIO_JOB_TIMEOUT_SECONDS" 300 $root.Values.backend.envVars -}}
+{{- $envVars := mergeOverwrite (deepCopy (default dict $config.envVars)) (deepCopy (default dict (index $config $modeVarsKey))) (dict "AUDIO_EXTRACTOR_MODE" $mode "AUDIO_EXTRACTOR_JOB_TIMEOUT_SECONDS" $timeout) -}}
+{{- if $root.Values.s3Gateway.enabled -}}
+{{- $_ := set $envVars "S3_GATEWAY_URL" (printf "http://%s:%v/proxy" (include "dictaphone.s3Gateway.fullname" $root) $root.Values.s3Gateway.service.port) -}}
+{{- end -}}
+{{- $env := include "dictaphone.env.transformDict" $envVars -}}
+{{- $fullName := printf "%s-%s" (include "dictaphone.audioExtractor.fullname" $root) $mode | trunc 63 | trimSuffix "-" -}}
+{{- $component := printf "audio-worker-%s" $mode -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}
+  annotations:
+     {{- with $config.dpAnnotations }}
+     {{- toYaml . | nindent 4 }}
+     {{- end }}
+  namespace: {{ $root.Release.Namespace | quote }}
+  labels:
+    {{- include "dictaphone.common.labels" (list $root $component) | nindent 4 }}
+spec:
+  replicas: {{ index $config $modeReplicasKey }}
+  {{- with $config.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "dictaphone.common.selectorLabels" (list $root $component) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with $config.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "dictaphone.common.selectorLabels" (list $root $component) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: {{ $config.automountServiceAccountToken }}
+      {{- with $config.serviceAccountName }}
+      serviceAccountName: {{ . | quote }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $config.terminationGracePeriodSeconds }}
+      {{- with $config.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $root.Values.images.credentials }}
+      imagePullSecrets:
+        - name: {{ include "dictaphone.secret.dockerconfigjson.name" (dict "fullname" (include "dictaphone.fullname" $root) "imageCredentials" $root.Values.images.credentials) }}
+      {{- end }}
+      {{- with $config.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      shareProcessNamespace: {{ $config.shareProcessNamespace }}
+      containers:
+        {{- with $config.sidecars }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: {{ $root.Chart.Name }}
+          image: "{{ $root.Values.images.audioExtractor.repository }}:{{ $root.Values.images.audioExtractor.tag }}"
+          imagePullPolicy: {{ $root.Values.images.audioExtractor.pullPolicy }}
+          {{- with $config.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- $env | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: {{ dig "AUDIO_EXTRACTOR_HEALTH_PORT" 8080 $envVars }}
+          {{- with $config.probes.startup }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.probes.liveness }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.probes.readiness }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            {{- range $name, $volume := $config.persistence }}
+            - name: "{{ $name }}"
+              mountPath: "{{ $volume.mountPath }}"
+            {{- end }}
+            {{- with $config.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with $config.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: work
+          {{- toYaml $config.workVolume | nindent 10 }}
+        {{- range $name, $volume := $config.persistence }}
+        - name: "{{ $name }}"
+          {{- if eq $volume.type "emptyDir" }}
+          emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: "{{ $fullName }}-{{ $name }}"
+          {{- end }}
+        {{- end }}
+        {{- range $config.extraVolumes }}
+        - name: {{ .name }}
+          {{- if .existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .existingClaim }}
+          {{- else if omit . "name" }}
+          {{- toYaml (omit . "name") | nindent 10 }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+{{- if $config.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ $root.Release.Namespace | quote }}
+spec:
+  maxUnavailable: {{ $config.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "dictaphone.common.selectorLabels" (list $root $component) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{ include "dictaphone.audioExtractor.deployment" (list . "transcoding") }}
+{{ include "dictaphone.audioExtractor.deployment" (list . "validation") }}

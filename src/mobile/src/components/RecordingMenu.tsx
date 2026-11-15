@@ -1,3 +1,6 @@
+import { canRetryAiJob } from '@/features/ai-jobs/utils/failurePresentation'
+import { useCooldown } from '@/api/useCooldown'
+import { isRateLimitError } from '@/api/rateLimits'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Alert,
@@ -12,46 +15,49 @@ import {
 import Popover from 'react-native-popover-view'
 import { Lucide } from '@react-native-vector-icons/lucide'
 import { useTranslation } from 'react-i18next'
-import type {
-  ApiAiJob,
-  TTranscriptionLanguage,
-} from '@/features/ai-jobs/api/types'
+import type { TTranscriptionLanguage } from '@/features/ai-jobs/api/types'
 import { useRetryWithLanguageMutation } from '@/features/ai-jobs/api/fetch'
 import { useDeleteFile } from '@/features/files/api/deleteFile'
 import { usePartialUpdateFile } from '@/features/files/api/partialUpdateFile'
 import { getMainAiJobs } from '@/features/ai-jobs/utils/getMainAiJobs'
 import { RetryTranscriptModal } from '@/components/RetryTranscriptModal'
+import { showRetryTranscriptResult } from '@/components/showRetryTranscriptResult'
 import { TRANSCRIPTION_LANGUAGES } from '@/features/ai-jobs/constants'
 import { AppText } from './AppText'
 import { colors } from './colors'
+import { ApiFileItem } from '@/features/files/api/types'
 
 type RecordingMenuProps = {
-  fileId: string
-  currentTitle: string
-  aiJobs: ApiAiJob[]
+  recording: ApiFileItem
   onDeleted: () => void
 }
 
 export default function RecordingMenu({
-  fileId,
-  currentTitle,
-  aiJobs,
+  recording,
   onDeleted,
 }: RecordingMenuProps) {
   const { t } = useTranslation()
+  const aiJobs = recording.ai_jobs
+  const currentTitle = recording.title
+  const fileId = recording.id
   const [isPopoverVisible, setIsPopoverVisible] = useState(false)
   const [isRenameModalVisible, setIsRenameModalVisible] = useState(false)
   const [isRetryModalVisible, setIsRetryModalVisible] = useState(false)
   const [retryLanguage, setRetryLanguage] =
     useState<TTranscriptionLanguage | null>(null)
+
   const [draftTitle, setDraftTitle] = useState(currentTitle)
   const [pendingRename, setPendingRename] = useState(false)
   const [pendingRetry, setPendingRetry] = useState(false)
 
   const deleteMutation = useDeleteFile()
   const renameMutation = usePartialUpdateFile()
+  const retryBlocked = useCooldown('transcriptionRetry').isBlocked
   const retryWithLanguageMutation = useRetryWithLanguageMutation()
   const { lastAiJobTranscript } = useMemo(() => getMainAiJobs(aiJobs), [aiJobs])
+  const hasTranscriptDocsLink = aiJobs.some(
+    (job) => job.type === 'transcript' && Boolean(job.docs_app_id)
+  )
 
   const hasPendingTranscriptJob = useMemo(
     () =>
@@ -61,10 +67,14 @@ export default function RecordingMenu({
     [aiJobs]
   )
   const isRetryDisabled = lastAiJobTranscript?.status === 'pending'
+  const isTranscriptFailed = lastAiJobTranscript?.status === 'failed'
   const canRetry =
+    recording.lifecycle_state === 'active' &&
     Boolean(lastAiJobTranscript?.id) &&
     !isRetryDisabled &&
-    !hasPendingTranscriptJob
+    !hasPendingTranscriptJob &&
+    canRetryAiJob(lastAiJobTranscript) &&
+    !retryBlocked
   const disabledRetryLanguages =
     lastAiJobTranscript?.status === 'success'
       ? [lastAiJobTranscript.language]
@@ -115,28 +125,36 @@ export default function RecordingMenu({
 
   const onConfirmDelete = useCallback(() => {
     setIsPopoverVisible(false)
-    Alert.alert(t('recordings.deleteTitle'), t('recordings.deleteMessage'), [
-      {
-        style: 'cancel',
-        text: t('recordings.deleteCancel'),
-      },
-      {
-        style: 'destructive',
-        text: t('recordings.deleteConfirm'),
-        onPress: async () => {
-          try {
-            await deleteMutation.mutateAsync({ fileId })
-            onDeleted()
-          } catch {
-            Alert.alert(
-              t('recordings.menu.errorTitle'),
-              t('recordings.menu.deleteError')
-            )
-          }
+    Alert.alert(
+      t('recordings.deleteTitle'),
+      t(
+        hasTranscriptDocsLink
+          ? 'recordings.deleteMessageWithDocsLink'
+          : 'recordings.deleteMessage'
+      ),
+      [
+        {
+          style: 'cancel',
+          text: t('recordings.deleteCancel'),
         },
-      },
-    ])
-  }, [deleteMutation, fileId, onDeleted, t])
+        {
+          style: 'destructive',
+          text: t('recordings.deleteConfirm'),
+          onPress: async () => {
+            try {
+              await deleteMutation.mutateAsync({ fileId })
+              onDeleted()
+            } catch {
+              Alert.alert(
+                t('recordings.menu.errorTitle'),
+                t('recordings.menu.deleteError')
+              )
+            }
+          },
+        },
+      ]
+    )
+  }, [deleteMutation, fileId, hasTranscriptDocsLink, onDeleted, t])
 
   const onConfirmRename = useCallback(async () => {
     if (!sanitizedTitle) {
@@ -159,14 +177,15 @@ export default function RecordingMenu({
         return
       }
       try {
-        await retryWithLanguageMutation.mutateAsync({
+        const job = await retryWithLanguageMutation.mutateAsync({
           id: lastAiJobTranscript.id,
           language,
         })
         setIsRetryModalVisible(false)
         setIsPopoverVisible(false)
-        Alert.alert(t('recordings.menu.retrySuccess'))
-      } catch {
+        showRetryTranscriptResult(t, job)
+      } catch (error) {
+        if (isRateLimitError(error)) return
         Alert.alert(
           t('recordings.menu.errorTitle'),
           t('recordings.menu.retryError')
@@ -216,7 +235,7 @@ export default function RecordingMenu({
                 {t('recordings.menu.rename')}
               </AppText>
             </Pressable>
-            {lastAiJobTranscript?.id && (
+            {lastAiJobTranscript?.id && canRetryAiJob(lastAiJobTranscript) && (
               <Pressable
                 style={({ pressed }) => [
                   styles.actionButton,
@@ -228,14 +247,22 @@ export default function RecordingMenu({
                     const availableLanguage = TRANSCRIPTION_LANGUAGES.find(
                       (language) => !disabledRetryLanguages.includes(language)
                     )
-                    setRetryLanguage(availableLanguage ?? null)
+                    setRetryLanguage(
+                      isTranscriptFailed
+                        ? lastAiJobTranscript.language
+                        : (availableLanguage ?? null)
+                    )
                     setPendingRetry(true)
                     setIsPopoverVisible(false)
                   }
                 }}
                 disabled={!canRetry || isBusy}
               >
-                <Lucide name="rotate-cw" size={15} color={colors.textPrimary} />
+                <Lucide
+                  name={isTranscriptFailed ? 'rotate-ccw' : 'languages'}
+                  size={15}
+                  color={colors.textPrimary}
+                />
                 <AppText
                   variant="body"
                   color={colors.textPrimary}
@@ -243,7 +270,9 @@ export default function RecordingMenu({
                 >
                   {isRetryDisabled
                     ? t('recordings.menu.retryPending')
-                    : t('recordings.menu.retry')}
+                    : isTranscriptFailed
+                      ? t('recordings.menu.retryFailed')
+                      : t('recordings.menu.retry')}
                 </AppText>
               </Pressable>
             )}
@@ -332,6 +361,7 @@ export default function RecordingMenu({
         </View>
       </Modal>
       <RetryTranscriptModal
+        mode={isTranscriptFailed ? 'retry' : 'language'}
         isVisible={isRetryModalVisible}
         isPending={retryWithLanguageMutation.isPending}
         selectedLanguage={retryLanguage}

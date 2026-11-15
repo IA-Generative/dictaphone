@@ -3,6 +3,10 @@ import { keys } from './queryKeys'
 import { useQuery } from '@tanstack/react-query'
 
 export interface ApiConfig {
+  LANGUAGE_CODE: string
+  restricted_access_message?: Record<string, string>
+  restricted_access_documentation_url?: string
+  rate_limit_ai_transcription_audio_hours_per_24h: number
   analytics?: {
     id: string
     host: string
@@ -19,6 +23,13 @@ export interface ApiConfig {
     ios_download_link: string
     android_download_link: string
   }
+  docs_integration_enabled: boolean
+  docs_integration_supports_synchroneous_calls: boolean
+  data_policy: {
+    file_auto_hard_delete_after_days: number
+    original_file_data_delete_after_days: number
+    is_relative_to_user: boolean
+  }
 }
 
 const fetchConfig = (): Promise<ApiConfig> => {
@@ -29,6 +40,6 @@ export const useConfig = () => {
   return useQuery({
     queryKey: [keys.config],
     queryFn: fetchConfig,
-    staleTime: Infinity,
+    staleTime: 10 * 60 * 1000,
   })
 }

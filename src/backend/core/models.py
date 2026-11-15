@@ -3,9 +3,9 @@ Declare and configure the models for the Dictaphone core application
 # pylint: disable=too-many-lines
 """
 
-# pylint: disable=too-many-lines
+# Registration services are imported lazily because they operate on these models.
+# pylint: disable=too-many-lines,import-outside-toplevel,cyclic-import
 import uuid
-from datetime import timedelta
 from logging import getLogger
 from os.path import splitext
 from typing import List
@@ -13,34 +13,51 @@ from typing import List
 from django.conf import settings
 from django.contrib.auth import models as auth_models
 from django.contrib.auth.base_user import AbstractBaseUser
-from django.core import mail, validators
+from django.core import validators
 from django.core.exceptions import ValidationError
-from django.core.files.storage import default_storage
 from django.db import models, transaction
+from django.db.models import Case, F, OuterRef, Q, Subquery, Value, When
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from celery import current_app
 from timezone_field import TimeZoneField
 
+from core.configuration import (
+    filter_files_by_policy_cutoff,
+    get_profile_for_email,
+    get_profile_for_file,
+)
+from core.emails import normalize_email
 from core.enums import ISO_639_1_CHOICES
+from core.payloads import read_stored_result
+from core.storage import get_storage_for_file
 from core.utils import format_transcript_for_markdown
 from core.webhook_models import WhisperXResponse
 
 logger = getLogger(__name__)
 
 
-def get_trashbin_cutoff():
-    """
-    Calculate the cutoff datetime for soft-deleted files based on the retention policy.
+def validate_storage_reference(owner_file_id, field, obj, kind):
+    """Reject cross-file or wrong-kind artifact links before saving an owner."""
+    if obj is not None and (obj.file_id != owner_file_id or obj.kind != kind):
+        raise ValidationError(
+            {field: "The storage object must match the file and kind."}
+        )
 
-    The function returns the current datetime minus the number of days specified in
-    the TRASHBIN_CUTOFF_DAYS setting, indicating the oldest date for files that can
-    remain in the trash bin.
 
-    Returns:
-        datetime: The cutoff datetime for soft-deleted files.
-    """
-    return timezone.now() - timedelta(days=settings.TRASHBIN_CUTOFF_DAYS)
+def get_trashbin_cutoff(file: File):
+    """Return the absolute purge deadline for a soft-deleted file."""
+    return file.configuration.trashbin_purge_at
+
+
+def get_original_file_data_cutoff_datetime(
+    file: File, *, include_grace_period: bool = False
+):
+    """Return cutoff datetime for original file data availability."""
+    if include_grace_period:
+        return file.configuration.original_file_data_delete_at_with_grace_period
+    return file.configuration.original_file_data_delete_at
 
 
 class BaseModel(models.Model):
@@ -151,6 +168,11 @@ class User(AbstractBaseUser, BaseModel, auth_models.PermissionsMixin):
         help_text=_("Whether to show the mobile app popup to the user."),
     )
 
+    oidc_roles = models.JSONField(default=None, null=True, blank=True, editable=False)
+    organization_siret = models.CharField(
+        max_length=14, blank=True, default="", editable=False
+    )
+
     objects = auth_models.UserManager()
 
     USERNAME_FIELD = "admin_email"
@@ -165,11 +187,37 @@ class User(AbstractBaseUser, BaseModel, auth_models.PermissionsMixin):
     def __str__(self):
         return self.email or self.admin_email or str(self.id)
 
+    def save(self, *args, **kwargs):
+        """Normalize the identity email before validation and saving."""
+        self.email = normalize_email(self.email)
+        super().save(*args, **kwargs)
+
+    @property
+    def access_status(self):
+        """Distinguish unknown OIDC roles from a confirmed access restriction."""
+        allowed_roles = settings.OIDC_ALLOWED_ROLES
+        if not allowed_roles:
+            return "allowed"
+        if self.oidc_roles and any(role in allowed_roles for role in self.oidc_roles):
+            return "allowed"
+        if AccessBypassEmail.is_email_allowed(self.email):
+            return "allowed"
+        return "unknown" if self.oidc_roles is None else "restricted"
+
+    @property
+    def is_restricted(self):
+        """Fail closed for processing while allowing clients to resolve unknown access."""
+        return self.access_status != "allowed"
+
     def email_user(self, subject, message, from_email=None, **kwargs):
-        """Email this user."""
+        """Queue an email to this user on the backend worker."""
         if not self.email:
             raise ValueError("User has no email address.")
-        mail.send_mail(subject, message, from_email, [self.email], **kwargs)
+        current_app.send_task(
+            "core.tasks.mail.send_email",
+            args=[subject, message, self.email],
+            kwargs={"from_email": from_email, **kwargs},
+        )
 
     def get_teams(self):
         """
@@ -177,6 +225,71 @@ class User(AbstractBaseUser, BaseModel, auth_models.PermissionsMixin):
         Must be cached if retrieved remotely.
         """
         return []
+
+
+class AccessBypassEmail(BaseModel):
+    """Allow-list of email addresses that may use processing even without the role
+    normally required by the OIDC access policy (see ``OIDC_ALLOWED_ROLES``).
+
+    Used as a fallback in the user access policy: a user who lacks the
+    required role is still granted access if their email matches an active,
+    non-expired entry here.
+    """
+
+    email = models.EmailField(
+        _("email address"),
+        unique=True,
+        help_text=_("email address allowed to bypass the role requirement"),
+    )
+    is_active = models.BooleanField(
+        _("active"),
+        default=True,
+        help_text=_("inactive entries are ignored without being deleted"),
+    )
+    note = models.TextField(
+        _("note"),
+        blank=True,
+        help_text=_("optional reason for granting this bypass"),
+    )
+    expires_at = models.DateTimeField(
+        _("expires on"),
+        blank=True,
+        null=True,
+        help_text=_("optional date after which this bypass no longer applies"),
+    )
+
+    class Meta:
+        db_table = "dictaphone_access_bypass_email"
+        verbose_name = _("access bypass email")
+        verbose_name_plural = _("access bypass emails")
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return self.email
+
+    def save(self, *args, **kwargs):
+        """Store the email in the shared normalized form."""
+        self.email = normalize_email(self.email)
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        """Normalize before unique validation so admin forms report duplicates."""
+        super().clean()
+        self.email = normalize_email(self.email)
+
+    @classmethod
+    def is_email_allowed(cls, email):
+        """Return True if ``email`` has an active, non-expired bypass entry."""
+        if not email:
+            return False
+        return (
+            cls.objects.filter(email=normalize_email(email), is_active=True)
+            .filter(
+                models.Q(expires_at__isnull=True)
+                | models.Q(expires_at__gt=timezone.now())
+            )
+            .exists()
+        )
 
 
 def get_resource_roles(resource: models.Model, user: User) -> List[str]:
@@ -211,8 +324,8 @@ class FileUploadStateChoices(models.TextChoices):
     """Possible states of a file."""
 
     PENDING = "pending", _("Pending")
+    ANALYZING = "analyzing", _("Analyzing")
     # Commented out for now, as we may need this when we implement the malware detection logic.
-    # ANALYZING = "analyzing", _("Analyzing")
     # SUSPICIOUS = "suspicious", _("Suspicious")
     # FILE_TOO_LARGE_TO_ANALYZE = (
     #     "file_too_large_to_analyze",
@@ -221,10 +334,112 @@ class FileUploadStateChoices(models.TextChoices):
     READY = "ready", _("Ready")
 
 
+class FileAudioExtractionStateChoices(models.TextChoices):
+    """Possible states of the validated audio representation of a file."""
+
+    PENDING_AUDIO_EXTRACTION = "pending_audio_extraction", _("Pending audio extraction")
+    EXTRACTING_AUDIO = "extracting_audio", _("Extracting audio")
+    EXTRACTION_DONE = "extraction_done", _("Audio extraction done")
+    AUDIO_EXTRACTION_FAILED = "audio_extraction_failed", _("Audio extraction failed")
+
+
+class FileLifecycleStateChoices(models.TextChoices):
+    """Possible lifecycle states of a file."""
+
+    ACTIVE = "active", _("Active")
+    PENDING_ORIGINAL_DATA_DELETION = (
+        "pending_original_data_deletion",
+        _("Pending original data deletion"),
+    )
+    ORIGINAL_DATA_DELETED = "original_data_deleted", _("Original data deleted")
+    PENDING_AUTO_HARD_DELETE = "pending_auto_hard_delete", _("Pending auto hard delete")
+
+
 class FileTypeChoices(models.TextChoices):
     """Defines the possible types of a file."""
 
     AUDIO_RECORDING = "audio_recording", _("Audio recording")
+
+
+class FileSourceChoices(models.TextChoices):
+    """Defines the possible source of a file."""
+
+    UNKNOWN = "unknown", _("Unknown")
+    WEB_RECORDING = "web_recording", _("Web recording")
+    WEB_FILE_UPLOAD = "web_file_upload", _("Web file upload")
+    MOBILE_RECORDING = "mobile_recording", _("Mobile recording")
+    MOBILE_FILE_UPLOAD = "mobile_file_upload", _("Mobile file upload")
+
+
+class FileQuerySet(models.QuerySet):
+    """File queries with the same extraction state used by API and admin."""
+
+    def visible_in_api(self):
+        """Exclude files hidden by hard deletion or their retention deadline."""
+        queryset = self.filter(hard_deleted_at__isnull=True).exclude(
+            lifecycle_state=FileLifecycleStateChoices.PENDING_AUTO_HARD_DELETE
+        )
+        return filter_files_by_policy_cutoff(
+            queryset,
+            policy="file_hard_delete",
+            include_grace_period=False,
+            comparison="gt",
+        )
+
+    def count_for_upload_limit(self, creator, file_type):
+        """Count retained uploads rather than invisible upload placeholders."""
+        # Abandoned/failed pending uploads are hidden in the UI, so counting them
+        # could exhaust a quota the user cannot free. Creation is already throttled so
+        # security wise, this should be fine;
+        # reserve a slot only at upload-ended, when leaving PENDING.
+        return (
+            self.visible_in_api()
+            .filter(creator=creator, type=file_type, deleted_at__isnull=True)
+            .exclude(upload_state=FileUploadStateChoices.PENDING)
+            .count()
+        )
+
+    def with_audio_state(self):
+        """Resolve current attempt in SQL without fetching job histories."""
+        latest = AudioJob.objects.filter(file_id=OuterRef("pk")).order_by(
+            "-created_at", "-id"
+        )
+        return self.annotate(
+            playback_audio_key=Subquery(
+                latest.filter(
+                    mode=AudioJobModeChoices.TRANSCODING,
+                    status=AudioJobStatusChoices.SUCCESS,
+                ).values("output_key")[:1]
+            ),
+            latest_audio_status=Subquery(latest.values("status")[:1]),
+            latest_audio_mode=Subquery(latest.values("mode")[:1]),
+        ).annotate(
+            inferred_audio_state=Case(
+                When(
+                    latest_audio_status=AudioJobStatusChoices.PROCESSING,
+                    then=Value(FileAudioExtractionStateChoices.EXTRACTING_AUDIO),
+                ),
+                When(
+                    latest_audio_status=AudioJobStatusChoices.PENDING,
+                    latest_audio_mode=AudioJobModeChoices.VALIDATION,
+                    then=Value(FileAudioExtractionStateChoices.EXTRACTING_AUDIO),
+                ),
+                When(
+                    latest_audio_status=AudioJobStatusChoices.SUCCESS,
+                    latest_audio_mode=AudioJobModeChoices.VALIDATION,
+                    then=Value(FileAudioExtractionStateChoices.EXTRACTION_DONE),
+                ),
+                When(
+                    latest_audio_status__in=[
+                        AudioJobStatusChoices.FAILED,
+                        AudioJobStatusChoices.STALE,
+                    ],
+                    then=Value(FileAudioExtractionStateChoices.AUDIO_EXTRACTION_FAILED),
+                ),
+                default=Value(FileAudioExtractionStateChoices.PENDING_AUDIO_EXTRACTION),
+                output_field=models.CharField(),
+            )
+        )
 
 
 class File(BaseModel):
@@ -254,8 +469,18 @@ class File(BaseModel):
         max_length=25,
         choices=FileUploadStateChoices.choices,
     )
+    lifecycle_state = models.CharField(
+        max_length=30,
+        choices=FileLifecycleStateChoices.choices,
+        default=FileLifecycleStateChoices.ACTIVE,
+    )
     mimetype = models.CharField(max_length=255, null=True, blank=True)
     size = models.BigIntegerField(null=True, blank=True)
+    language = models.CharField(
+        max_length=2,
+        choices=ISO_639_1_CHOICES,
+        default="fr",
+    )
     description = models.TextField(null=True, blank=True)
     malware_detection_info = models.JSONField(
         null=True,
@@ -263,6 +488,34 @@ class File(BaseModel):
         default=dict,
         help_text=_("Malware detection info when the analysis status is unsafe."),
     )
+    source = models.CharField(
+        max_length=25,
+        choices=FileSourceChoices.choices,
+        default=FileSourceChoices.UNKNOWN,
+    )
+    storage_bucket_name = models.CharField(max_length=63)
+    original_object = models.ForeignKey(
+        "ObjectStorageObject",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    temporary_upload_object = models.ForeignKey(
+        "ObjectStorageObject",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    original_file_data_delete_at = models.DateTimeField()
+    original_file_data_delete_at_with_grace_period = models.DateTimeField()
+    file_auto_hard_delete_at = models.DateTimeField()
+    file_auto_hard_delete_at_with_grace_period = models.DateTimeField()
+    trashbin_purge_at = models.DateTimeField(null=True, blank=True)
+    trashbin_purge_at_with_grace_period = models.DateTimeField(null=True, blank=True)
+
+    objects = FileQuerySet.as_manager()
 
     class Meta:
         db_table = "file"
@@ -271,18 +524,145 @@ class File(BaseModel):
         ordering = ("created_at",)
         indexes = [
             models.Index(fields=["creator", "type", "-created_at"]),
+            # To ease with the deletion queries
+            models.Index(fields=["-created_at"]),
+            models.Index(
+                fields=["storage_bucket_name", "created_at"],
+                name="file_bucket_created_at_idx",
+            ),
+            models.Index(
+                fields=["storage_bucket_name", "deleted_at"],
+                name="file_bucket_deleted_at_idx",
+            ),
+            models.Index(
+                fields=["original_file_data_delete_at"],
+                name="file_original_delete_at_idx",
+            ),
+            models.Index(
+                fields=["original_file_data_delete_at_with_grace_period"],
+                name="file_original_delete_grace_idx",
+            ),
+            models.Index(
+                fields=["file_auto_hard_delete_at"],
+                name="file_hard_delete_at_idx",
+            ),
+            models.Index(
+                fields=["file_auto_hard_delete_at_with_grace_period"],
+                name="file_hard_delete_grace_idx",
+            ),
+            models.Index(
+                fields=["trashbin_purge_at"],
+                name="file_trashbin_purge_at_idx",
+            ),
+            models.Index(
+                fields=["trashbin_purge_at_with_grace_period"],
+                name="file_trashbin_purge_grace_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(trashbin_purge_at__isnull=True)
+                    & Q(trashbin_purge_at_with_grace_period__isnull=True)
+                )
+                | (
+                    Q(trashbin_purge_at__isnull=False)
+                    & Q(trashbin_purge_at_with_grace_period__isnull=False)
+                ),
+                name="file_trashbin_deadlines",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        original_file_data_delete_at__lte=(
+                            F("original_file_data_delete_at_with_grace_period")
+                        )
+                    )
+                ),
+                name="file_original_deadline_order",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        file_auto_hard_delete_at__lte=F(
+                            "file_auto_hard_delete_at_with_grace_period"
+                        )
+                    )
+                ),
+                name="file_hard_delete_deadline_order",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    (
+                        Q(trashbin_purge_at__isnull=True)
+                        & Q(trashbin_purge_at_with_grace_period__isnull=True)
+                    )
+                    | Q(trashbin_purge_at__lte=F("trashbin_purge_at_with_grace_period"))
+                ),
+                name="file_trashbin_deadline_order",
+            ),
         ]
 
     def __str__(self):
         return str(self.title)
 
+    @transaction.atomic
     def save(self, *args, **kwargs):
         """Set the upload state to pending if it's the first save and it's a file."""
 
-        if self.created_at is None:
+        is_new = self._state.adding
+        if is_new:
             self.upload_state = FileUploadStateChoices.PENDING
+            self.lifecycle_state = FileLifecycleStateChoices.ACTIVE
+            # The snapshot fields are required at the database level. Populate
+            # provisional values before the insert; they are recalculated below
+            # once auto_now_add has assigned created_at.
+            self._set_configuration_snapshot(timezone.now())
 
-        return super().save(*args, **kwargs)
+        super().save(*args, **kwargs)
+        if is_new:
+            self._set_configuration_snapshot()
+            super().save(
+                update_fields=[
+                    "storage_bucket_name",
+                    "original_file_data_delete_at",
+                    "original_file_data_delete_at_with_grace_period",
+                    "file_auto_hard_delete_at",
+                    "file_auto_hard_delete_at_with_grace_period",
+                ]
+            )
+            from core.object_storage import (  # noqa: PLC0415
+                register_file_objects,
+            )
+
+            register_file_objects(self)
+
+    def clean(self):
+        super().clean()
+        validate_storage_reference(
+            self.pk,
+            "original_object",
+            self.original_object,
+            ObjectStorageObject.Kind.ORIGINAL,
+        )
+        validate_storage_reference(
+            self.pk,
+            "temporary_upload_object",
+            self.temporary_upload_object,
+            ObjectStorageObject.Kind.TEMPORARY,
+        )
+
+    def _set_configuration_snapshot(self, reference_time=None):
+        """Persist the configuration selected by the creator's email domain."""
+        profile = get_profile_for_email(self.creator.email if self.creator_id else None)
+        reference_time = reference_time or self.created_at
+        for field, value in profile.as_file_snapshot(reference_time).items():
+            setattr(self, field, value)
+
+    @property
+    def configuration(self):
+        """Return this file's persisted policy and storage configuration."""
+        return get_profile_for_file(self)
 
     def delete(self, using=None, keep_parents=False):
         if self.deleted_at is None:
@@ -291,9 +671,9 @@ class File(BaseModel):
         return super().delete(using, keep_parents)
 
     @property
-    def is_pending_upload(self):
-        """Return whether the file is in a pending upload state"""
-        return self.upload_state == FileUploadStateChoices.PENDING
+    def is_ready(self):
+        """Return whether the file is in a ready state"""
+        return self.upload_state == FileUploadStateChoices.READY
 
     @property
     def extension(self):
@@ -321,6 +701,16 @@ class File(BaseModel):
         return f"{settings.FILE_UPLOAD_PATH}/{self.pk!s}"
 
     @property
+    def temporary_key_base(self):
+        """Temporary key base used while upload is still pending."""
+        if not self.pk:
+            raise RuntimeError(
+                "The file instance must be saved before requesting a storage key."
+            )
+
+        return f"{settings.FILE_UPLOAD_TMP_PATH}/{self.pk!s}"
+
+    @property
     def file_key(self):
         """Key used to store the file in object storage."""
         _, extension = splitext(self.filename)
@@ -328,7 +718,71 @@ class File(BaseModel):
         # leaking Personal Information in logs, etc.
         return f"{self.key_base}{extension!s}"
 
-    def get_abilities(self, user):
+    @property
+    def temporary_file_key(self):
+        """Temporary key used to upload the file before it is finalized."""
+        _, extension = splitext(self.filename)
+        return f"{self.temporary_key_base}{extension!s}"
+
+    @property
+    def legacy_audio_file_key(self):
+        """Old fixed key, retained for migration and storage cleanup."""
+        return f"{self.key_base}.audio.ogg"
+
+    @property
+    def latest_audio_job(self):
+        """Return the current attempt, including its transcoding source."""
+        return (
+            self.audio_jobs.select_related("source_job")
+            .order_by("-created_at", "-id")
+            .first()
+        )
+
+    @property
+    def audio_extraction_state(self):
+        """Expose the existing API state from the latest attempt."""
+        if hasattr(self, "inferred_audio_state"):
+            return self.inferred_audio_state
+        job = self.latest_audio_job
+        if job is None:
+            return FileAudioExtractionStateChoices.PENDING_AUDIO_EXTRACTION
+        if job.status == AudioJobStatusChoices.PROCESSING or (
+            job.status == AudioJobStatusChoices.PENDING
+            and job.mode == AudioJobModeChoices.VALIDATION
+        ):
+            return FileAudioExtractionStateChoices.EXTRACTING_AUDIO
+        if (
+            job.status == AudioJobStatusChoices.SUCCESS
+            and job.mode == AudioJobModeChoices.VALIDATION
+        ):
+            return FileAudioExtractionStateChoices.EXTRACTION_DONE
+        if job.status in {AudioJobStatusChoices.FAILED, AudioJobStatusChoices.STALE}:
+            return FileAudioExtractionStateChoices.AUDIO_EXTRACTION_FAILED
+        return FileAudioExtractionStateChoices.PENDING_AUDIO_EXTRACTION
+
+    def get_audio_extraction_state_display(self):
+        """Return the localized extraction state label for the admin."""
+        return dict(FileAudioExtractionStateChoices.choices)[
+            self.audio_extraction_state
+        ]
+
+    @property
+    def audio_file_key(self):
+        """Resolve the latest audio artifact, with a legacy fallback for cleanup."""
+        job = self.latest_audio_job
+        if job is None:
+            return self.legacy_audio_file_key
+        return (
+            job.output_key
+            if job.mode == AudioJobModeChoices.TRANSCODING
+            else (
+                job.source_job.output_key
+                if job.source_job_id
+                else self.legacy_audio_file_key
+            )
+        )
+
+    def get_abilities(self, user, *, access_status=None):
         """
         Compute and return abilities for a given user on the file.
         """
@@ -353,7 +807,9 @@ class File(BaseModel):
             "media_auth": retrieve and not is_hard_deleted,
             "partial_update": can_update,
             "update": can_update,
-            "upload_ended": can_update and user.is_authenticated,
+            "upload_ended": can_update
+            and (access_status if access_status is not None else user.access_status)
+            == "allowed",
             "restore": can_restore,
         }
 
@@ -367,7 +823,16 @@ class File(BaseModel):
             raise RuntimeError("This file is already deleted.")
 
         self.deleted_at = timezone.now()
-        self.save(update_fields=["deleted_at"])
+        profile = get_profile_for_email(self.creator.email if self.creator_id else None)
+        for field, value in profile.as_trashbin_snapshot(self.deleted_at).items():
+            setattr(self, field, value)
+        self.save(
+            update_fields=[
+                "deleted_at",
+                "trashbin_purge_at",
+                "trashbin_purge_at_with_grace_period",
+            ]
+        )
 
     def hard_delete(self):
         """
@@ -411,7 +876,7 @@ class File(BaseModel):
                 }
             )
 
-        if self.deleted_at < get_trashbin_cutoff():
+        if timezone.now() > get_trashbin_cutoff(self):
             raise ValidationError(
                 {
                     "deleted_at": ValidationError(
@@ -423,8 +888,213 @@ class File(BaseModel):
 
         # Restore the current item
         self.deleted_at = None
+        self.trashbin_purge_at = None
+        self.trashbin_purge_at_with_grace_period = None
 
-        self.save(update_fields=["deleted_at"])
+        self.save(
+            update_fields=[
+                "deleted_at",
+                "trashbin_purge_at",
+                "trashbin_purge_at_with_grace_period",
+            ]
+        )
+
+
+class AudioJobModeChoices(models.TextChoices):
+    """Stages of audio preparation."""
+
+    TRANSCODING = "transcoding", _("Transcoding")
+    VALIDATION = "validation", _("Validation")
+
+
+class AudioJobStatusChoices(models.TextChoices):
+    """Lifecycle of one attempt; retries always create another row."""
+
+    PENDING = "pending", _("Pending")
+    PROCESSING = "processing", _("Processing")
+    SUCCESS = "success", _("Success")
+    FAILED = "failed", _("Failed")
+    STALE = "stale", _("Stale")
+
+
+class ObjectStorageObject(BaseModel):
+    """An application-owned object location, including durable cleanup state."""
+
+    class Kind(models.TextChoices):
+        """Artifacts with distinct application lifecycles."""
+
+        TEMPORARY = "temporary", "Temporary upload"
+        ORIGINAL = "original", "Original"
+        AUDIO = "audio", "Audio"
+        TRANSCRIPT = "transcript", "Transcript"
+        SUMMARY = "summary", "Summary"
+
+    class State(models.TextChoices):
+        """Presence is established separately from allocating a location."""
+
+        PENDING = "pending", "Pending"
+        AVAILABLE = "available", "Available"
+        MISSING = "missing", "Missing"
+        DELETING = "deleting", "Deleting"
+        DELETED = "deleted", "Deleted"
+
+    file = models.ForeignKey(
+        File,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="storage_objects",
+    )
+    # Keep the owning identity after file deletion for audit and cleanup retries.
+    file_identifier = models.UUIDField(db_index=True)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+    storage_bucket_name = models.CharField(max_length=63)
+    key = models.CharField(max_length=1024)
+    state = models.CharField(
+        max_length=12, choices=State.choices, default=State.PENDING
+    )
+    size = models.PositiveBigIntegerField(null=True, blank=True)
+    etag = models.CharField(max_length=255, blank=True, default="")
+    checksum_algorithm = models.CharField(max_length=32, blank=True, default="")
+    checksum_value = models.CharField(max_length=255, blank=True, default="")
+    checksum_type = models.CharField(max_length=16, blank=True, default="")
+    checksum_source = models.CharField(max_length=16, blank=True, default="")
+    metadata_checked_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "object_storage_object"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["storage_bucket_name", "key"],
+                name="storage_object_location_unique",
+            ),
+        ]
+        indexes = [models.Index(fields=["state", "updated_at"])]
+
+    def __str__(self):
+        return f"{self.storage_bucket_name}/{self.key}"
+
+    def clean(self):
+        super().clean()
+        if self.file_id and self.file_id != self.file_identifier:
+            raise ValidationError({"file": "The owning file identity must match."})
+        if bool(self.checksum_algorithm) != bool(self.checksum_value):
+            raise ValidationError("Checksum algorithm and value must be set together.")
+
+
+class AudioJob(BaseModel):
+    """One worker attempt, with a permanent identity and storage destination."""
+
+    file = models.ForeignKey(File, on_delete=models.CASCADE, related_name="audio_jobs")
+    extraction_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    mode = models.CharField(max_length=12, choices=AudioJobModeChoices.choices)
+    status = models.CharField(
+        max_length=12,
+        choices=AudioJobStatusChoices.choices,
+        default=AudioJobStatusChoices.PENDING,
+    )
+    attempt_number = models.PositiveIntegerField(default=0)
+    retry_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="retry"
+    )
+    source_job = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="validations",
+    )
+    output_key = models.CharField(max_length=1024, null=True, blank=True, unique=True)
+    output_object = models.ForeignKey(
+        ObjectStorageObject,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.FloatField(null=True, blank=True)
+    error = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "audio_job"
+        ordering = ("created_at", "id")
+        indexes = [
+            models.Index(fields=["file", "-created_at", "-id"]),
+            models.Index(fields=["mode", "status", "created_at"]),
+            models.Index(fields=["status", "expires_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["extraction_id", "mode", "attempt_number"],
+                name="audio_job_unique_attempt",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.file_id} - {self.mode} - {self.status} - {self.id}"
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Allocate the key before issuing a signed upload URL."""
+        if self._state.adding and self.mode == AudioJobModeChoices.TRANSCODING:
+            self.output_key = (
+                self.output_key or f"{self.file.key_base}/audio/{self.id}.ogg"
+            )
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new and self.output_key:
+            from core.object_storage import (  # noqa: PLC0415
+                register_job_object,
+            )
+
+            register_job_object(self)
+
+    def clean(self):
+        super().clean()
+        validate_storage_reference(
+            self.file_id,
+            "output_object",
+            self.output_object,
+            ObjectStorageObject.Kind.AUDIO,
+        )
+        if self.mode == AudioJobModeChoices.VALIDATION and self.output_object_id:
+            raise ValidationError(
+                {"output_object": "Validation jobs do not produce objects."}
+            )
+
+
+class TranscriptionUsage(BaseModel):
+    """Audio charged to a user, retained independently of files and AI jobs."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="transcription_usages",
+    )
+    # A plain UUID preserves the charge when the source AI job is deleted.
+    ai_job_id = models.UUIDField(unique=True)
+    submitted_at = models.DateTimeField()
+    duration_seconds = models.FloatField()
+    ignored = models.BooleanField(default=False)
+    ignored_reason = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "transcription_usage"
+        indexes = [
+            models.Index(
+                fields=["user", "submitted_at"], name="transcript_usage_user_time_idx"
+            ),
+            models.Index(fields=["submitted_at"], name="transcript_usage_time_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} - {self.duration_seconds}s - {self.ai_job_id}"
 
 
 class AiJobStatusChoices(models.TextChoices):
@@ -442,6 +1112,17 @@ class AiJobTypeChoices(models.TextChoices):
     SUMMARIZE = "summary", _("Summary")
 
 
+class AiJobFailureReasonChoices(models.TextChoices):
+    """Public reasons an AI job can fail."""
+
+    AUDIO_TOO_LONG = "AUDIO_TOO_LONG", _("Audio too long")
+    RATE_LIMIT_TRANSCRIPTION_EXCEEDED = (
+        "RATE_LIMIT_TRANSCRIPTION_EXCEEDED",
+        _("Transcription rate limit exceeded"),
+    )
+    UNKNOWN_FAILURE = "UNKNOWN_FAILURE", _("Unknown failure")
+
+
 class AiFileJob(BaseModel):
     """
     A job that is run to process an audio file.
@@ -453,9 +1134,22 @@ class AiFileJob(BaseModel):
         choices=AiJobTypeChoices.choices,
     )
     file = models.ForeignKey(File, on_delete=models.CASCADE, related_name="ai_jobs")
+    result_object = models.ForeignKey(
+        ObjectStorageObject,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
     status = models.CharField(
         max_length=25,
         choices=AiJobStatusChoices.choices,
+    )
+    failure_reason = models.CharField(
+        max_length=40,
+        choices=AiJobFailureReasonChoices.choices,
+        blank=True,
+        default="",
     )
     language = models.CharField(
         max_length=2,
@@ -463,6 +1157,14 @@ class AiFileJob(BaseModel):
         default="fr",
     )
     docs_app_id = models.CharField(max_length=255, null=True, blank=True)
+    docs_creation_in_progress = models.BooleanField(default=False)
+    validated_audio_job = models.ForeignKey(
+        AudioJob,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="transcriptions",
+    )
 
     class Meta:
         db_table = "ai_job"
@@ -475,6 +1177,59 @@ class AiFileJob(BaseModel):
 
     def __str__(self):
         return f"{self.file.title} - {self.type} - {self.status} - {self.id}"
+
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        """Reserve the result location before any external result can arrive."""
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new:
+            from core.object_storage import (  # noqa: PLC0415
+                register_job_object,
+            )
+
+            register_job_object(self)
+
+    def clean(self):
+        super().clean()
+        validate_storage_reference(
+            self.file_id,
+            "result_object",
+            self.result_object,
+            self.type,
+        )
+
+    @transaction.atomic
+    def mark_failed(self, reason=AiJobFailureReasonChoices.UNKNOWN_FAILURE):
+        """Persist terminal failure and release its transcription quota charge."""
+        self.status = AiJobStatusChoices.FAILED
+        self.failure_reason = AiJobFailureReasonChoices(reason)
+        self.save(update_fields=["status", "failure_reason", "updated_at"])
+        if self.type == AiJobTypeChoices.TRANSCRIPT:
+            TranscriptionUsage.objects.filter(ai_job_id=self.pk, ignored=False).update(
+                ignored=True,
+                ignored_reason=f"Transcription failed: {self.failure_reason}",
+                updated_at=timezone.now(),
+            )
+
+    @transaction.atomic
+    def delete(self, using=None, keep_parents=False):
+        """Delete the AI job and its result file from object storage."""
+        logger.info(
+            "Deleted AI job %s and its result file if it exists %s", self.id, self.key
+        )
+        from core.object_storage import (  # noqa: PLC0415
+            delete_object,
+            register_job_object,
+        )
+
+        obj = register_job_object(self)
+        ObjectStorageObject.objects.filter(pk=obj.pk).update(
+            state=ObjectStorageObject.State.DELETING, updated_at=timezone.now()
+        )
+        result = super().delete(using=using, keep_parents=keep_parents)
+        transaction.on_commit(lambda: delete_object(obj))
+        return result
 
     @property
     def key(self) -> str:
@@ -490,8 +1245,9 @@ class AiFileJob(BaseModel):
         if self.status != AiJobStatusChoices.SUCCESS:
             raise ValueError(f"Job status is not success: {self.status}")
 
-        with default_storage.open(self.key, "rb") as result_file:
-            content = result_file.read()
+        content = read_stored_result(
+            get_storage_for_file(self.file, key=self.key), self.key, self.type
+        )
 
         if self.type == AiJobTypeChoices.TRANSCRIPT:
             whisper_response = WhisperXResponse.model_validate_json(content)

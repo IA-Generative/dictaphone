@@ -27,9 +27,6 @@
     "label": "Enrollment code",
     "change": "Change"
   },
-  "mainMenu": {
-    "importAudio": "Import an audio file"
-  },
   "pipeline": {
     "status": {
       "pending": "Pending…",
@@ -64,7 +61,8 @@
     "permissionOk": "OK",
     "recordingName": "Recording {{duration}}",
     "newRecording": "New recording",
-    "consentNotice": "Recording requires participants consent",
+    "consentNotice": "Recording requires participants' consent",
+    "pickLanguage": "Recording language:",
     "recordingInProgress": "Recording in progress",
     "recordingPaused": "Recording paused",
     "recordingSubtitle": "You can pause the recording at any time.",
@@ -83,19 +81,37 @@
     "discardRecordingConfirm": "Discard",
     "recordingMaxDurationTitle": "Maximum recording duration reached",
     "recordingMaxDurationMessage": "Recording stopped automatically.",
-    "recordingMaxDurationConfirm": "OK"
+    "recordingMaxDurationConfirm": "OK",
+    "batteryRestrictionsTitle": "Restrictions may apply",
+    "batteryOptimizationMessage": "To ensure recording is never silently stopped, please disable battery optimization for the app in your settings.",
+    "doNotShowAgain": "Ok, don't show again"
   },
   "recordings": {
+    "fileLimit": {
+      "title": "Recording limit reached",
+      "description": "You’ve reached {{limit}} recordings. Delete some to upload more.",
+      "manageRecordings": "Manage my recordings"
+    },
     "emptyTitle": "No recordings yet",
-    "emptySubtitle": "Go to Record tab and capture your first audio note.",
+    "emptySubtitle": "Start a recording or import an audio file using the buttons below.",
     "pendingTitle": "Pending uploads",
     "manageOnline": "Manage recordings online",
     "uploading": "Uploading...",
+    "uploadNotifications": {
+      "channelName": "Recording uploads",
+      "uploadingTitle": "Uploading recording",
+      "uploadingIndeterminate": "Uploading…",
+      "completeTitle": "Upload complete",
+      "completeBody": "Open the app to finish uploading the recording",
+      "failedTitle": "Upload failed",
+      "failedBody": "Open the app to retry the recording upload"
+    },
     "loginButton": "Login with ProConnect",
     "loginHelper": "Log in to access your transcripts.",
     "delete": "Delete",
     "deleteTitle": "Delete recording",
-    "deleteMessage": "This action cannot be undone.",
+    "deleteMessage": "Are you sure you want to delete this recording and associated transcript?",
+    "deleteMessageWithDocsLink": "Are you sure you want to delete this recording and associated transcript? The transcript exported to Docs will remain available in Docs.",
     "deleteConfirm": "Delete",
     "deleteCancel": "Cancel",
     "synced": "Synced",
@@ -105,19 +121,74 @@
     "wifiOnlySync": "Waiting for WiFi to sync",
     "syncNow": "Sync now",
     "syncNowHint": "Transfer pending recordings using current network connection",
+    "import": {
+      "button": "Import audio file",
+      "preparing": "Preparing audio file...",
+      "errorTitle": "Unable to import audio file",
+      "errors": {
+        "unsupported_type": "This file type is not supported.",
+        "too_large": "This file is too large.",
+        "too_long": "This audio file is too long.",
+        "unrecognized_audio": "This audio file could not be read.",
+        "generic": "The audio file could not be imported."
+      }
+    },
     "listFooter": "No other recordings",
+    "missingFiles": {
+      "title": "Recordings removed",
+      "message": "Some local recordings were removed because their audio files are no longer available on this device:\n{{files}}",
+      "untitledFallback": "Untitled recording"
+    },
+    "recoveredFiles": {
+      "title": "Recovered recordings",
+      "message": "Some local audio files were found on this device and added back to your recordings:\n{{files}}"
+    },
+    "recoverModal": {
+      "title": "Recovering recordings",
+      "runningDescription": "The app likely exited while there was a recording in progress. Files are being recovered. Please wait.",
+      "doneDescription": "The app likely exited while there was a recording in progress. Recovered files were added to your recordings:",
+      "close": "Close",
+      "ok": "OK"
+    },
+    "dataPolicy": {
+      "audioKeptUntil": "Audio recording is kept until {{value, formatDate}}",
+      "fileKeptUntil": "Transcript is kept until {{value, formatDate}}",
+      "alertTitle": "Data policy",
+      "alertDescription": "Your recordings are kept on our servers for {{originalDataKeptFor}} days. The transcripts (text) are kept for {{transcriptDataKeptFor}} days. This policy applies to new recordings and may differ from this / previous recordings.",
+      "alertAction": "Understood"
+    },
+    "createInDocsModal": {
+      "title": "Creating your Docs document",
+      "description": "Please wait while your transcript is added to Docs."
+    },
     "meta": {
+      "uploadBlocked": {
+        "transient": "Upload stopped after repeated failures. Retry to continue.",
+        "authentication": "Sign in to retry this upload.",
+        "permission": "Upload not allowed. Check your access or available file quota.",
+        "validation": "Upload rejected. Check the file type and size."
+      },
       "loginToSync": "Login to sync",
       "offline": "Will sync when online",
       "processing": "Processing",
+      "processingLong": "Processing ∼ {{value}}",
       "uploading": "Uploading",
       "waitingForUpload": "Waiting for upload",
-      "processingFailed": "Processing failed"
+      "processingFailed": "Processing failed",
+      "pendingAudioExtraction": "Preparing audio",
+      "extractingAudio": "Converting audio",
+      "audioExtractionFailed": "Invalid audio file"
     },
     "menu": {
+      "retryUpload": "Retry upload",
+      "deleteLocal": "Delete",
+      "deleteLocalTitle": "Delete this recording?",
+      "deleteLocalMessage": "This recording was never uploaded. It will be permanently deleted from this device. Share it first to keep a copy.",
       "rename": "Rename",
-      "retry": "Retry",
-      "retryPending": "Retry (in progress)",
+      "retry": "Change language",
+      "retryFailed": "Retry transcription",
+      "share": "Share audio file",
+      "retryPending": "Change language (in progress)",
       "renameTitle": "Rename recording",
       "renameDescription": "Choose a clear title so you can find this recording quickly.",
       "renamePlaceholder": "Recording title",
@@ -125,11 +196,17 @@
       "errorTitle": "Something went wrong",
       "deleteError": "Unable to delete this recording right now.",
       "renameError": "Unable to rename this recording right now.",
+      "shareError": "Unable to share this recording right now.",
       "retryError": "Unable to restart generation right now.",
       "retrySuccess": "Generation restarted",
       "retryModal": {
         "title": "Regenerate transcript",
+        "titleChangeLanguage": "Change language",
         "description": "Pick a language for the new generation.",
+        "descriptionChangeLanguage": "Pick a language to transcribe this recording in.",
+        "extra": "Reprocessing takes a few minutes and replaces the current transcript.",
+        "changeLanguageMainAction": "Transcribe",
+        "retryMainAction": "Retry",
         "languageLabel": "Language",
         "languageOptions": {
           "en": "English",
@@ -139,7 +216,19 @@
         }
       }
     },
-    "openInDocs": "Open in Docs"
+    "openInDocs": "Open in Docs",
+    "createInDocsError": "Unable to create the Docs document right now. Please try again.",
+    "openInDocsError": "Unable to open the Docs document right now. Please try again.",
+    "failures": {
+      "tooLong": "This audio is too long to transcribe.",
+      "tooLongDescription": "The maximum audio duration is {{duration}}. Shorten the audio and submit it again.",
+      "quota": "Transcription audio allowance reached.",
+      "quotaRetryTitle": "Transcription not restarted: audio allowance reached",
+      "quotaDescription": "The service allows your account to submit up to {{hours}} hours of audio in a rolling 24-hour period, including retries. Try again later when allowance becomes available.",
+      "quotaWithoutLimit": "The transcription audio allowance set by the service for your account has been reached. Try again later when allowance becomes available.",
+      "faq": "Read the FAQ",
+      "tooLongFaqUrl": "https://docs.numerique.gouv.fr/docs/95fcf4c6-09bf-43ec-bb78-5fd9de6be712/#1bcb3602-6b40-433b-a23f-c9cde224f5ce"
+    }
   },
   "transcript": {
     "speaker": "Speaker",
@@ -192,17 +281,30 @@
       "formatDateTime": "{{value, formatDateTime}}",
       "formatDateTimeStatic": "{{value, formatDateTimeStatic}}",
       "duration": "{{duration, formatDuration}}",
+      "durationLong": "{{duration, formatDurationLong}}",
+      "durationHoursMinutes": "{{hours}}h {{mins}} min",
+      "durationHours": "{{hours}}h ",
       "durationMinsSeconds": "{{mins}} min {{secs}}",
       "durationMins": "{{mins}} min",
       "durationSeconds": "{{secs}} sec",
       "fileSizeMb": "{{size, number(maximumFractionDigits: 2)}} Mb"
     },
     "dates": {
+      "tomorrow": "Tomorrow",
       "today": "Today",
       "yesterday": "Yesterday",
       "todayAt": "Today at",
       "yesterdayAt": "Yesterday at",
       "at": "at"
     }
+  },
+  "rateLimits": {
+    "title": "Too many requests. Please wait.",
+    "tryLater": "Please try again later.",
+    "retryAt": "You can try again after {{time}}.",
+    "uploadsPaused": "Recordings are saved on this device and will be uploaded later.",
+    "resumeUploads": "Resume uploads",
+    "retry": "Try again",
+    "uploadsPausedShort": "Uploads paused"
   }
 }

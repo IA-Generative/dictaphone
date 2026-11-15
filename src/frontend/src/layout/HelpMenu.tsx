@@ -1,16 +1,15 @@
+import { DropdownMenu } from '@gouvfr-lasuite/ui-components'
 import {
   BubbleText,
   Building,
-  DocLink,
-  DropdownMenu,
+  ExternalLink,
   QuestionMark,
-} from '@gouvfr-lasuite/ui-kit'
-import { Button } from '@gouvfr-lasuite/cunningham-react'
+} from '@gouvfr-lasuite/ui-components/icons'
+import { Button } from '@gouvfr-lasuite/ui-components'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUser } from '@/features/auth/api/useUser'
 import { DownloadMobileAppPopUp } from '@/layout/DownloadMobileAppPopUp'
-import { useConfig } from '@/api/useConfig'
 
 const legalKeys = [
   'accessibility',
@@ -26,13 +25,6 @@ export function HelpMenu() {
     useState(false)
   const { t, i18n } = useTranslation('layout')
   const user = useUser()
-
-  const { data } = useConfig()
-
-  // we should remove this once the store are live to avoid moving elements
-  const forceHideMobileStuff =
-    !data?.mobile_app?.ios_download_link ||
-    !data?.mobile_app?.android_download_link
 
   useEffect(() => {
     if (user.user?.flag_show_mobile_app_popup) {
@@ -77,9 +69,9 @@ export function HelpMenu() {
   }, [i18n.language, t, user.user?.id])
 
   return (
-    <>
+    <aside aria-label={t('info.help.asideAriaLabel')}>
       <DownloadMobileAppPopUp
-        open={openDownloadMobileAppPopUp && !forceHideMobileStuff}
+        open={openDownloadMobileAppPopUp}
         setOpen={handleCloseMobileAppPopup}
       />
       <DropdownMenu
@@ -88,31 +80,27 @@ export function HelpMenu() {
             icon: <Building />,
             label: t('info.help.legalInfo'),
             children: legalKeys.map((key) => ({
-              icon: <DocLink />,
+              icon: <ExternalLink />,
               label: t(`legal.${key}`),
               callback: () => {
                 window.open(t(`legal.${key}Url`), '_blank')
               },
             })),
           },
-          ...(forceHideMobileStuff
-            ? []
-            : [
-                {
-                  icon: <span className="material-icons">devices</span>,
-                  label: t('info.help.mobileApp'),
-                  callback: () => setOpenDownloadMobileAppPopUp(true),
-                },
-              ]),
           {
-            icon: <DocLink />,
+            icon: <span className="material-icons">devices</span>,
+            label: t('info.help.mobileApp'),
+            callback: () => setOpenDownloadMobileAppPopUp(true),
+          },
+          {
+            icon: <ExternalLink />,
             label: t('info.help.documentation'),
             callback: () => {
               window.open(t('info.documentationUrl'), '_blank')
             },
           },
           {
-            icon: <DocLink />,
+            icon: <ExternalLink />,
             label: 'FAQ',
             callback: () => {
               window.open(t('info.faqUrl'), '_blank')
@@ -136,6 +124,6 @@ export function HelpMenu() {
           aria-label={t('info.help.ariaLabel')}
         />
       </DropdownMenu>
-    </>
+    </aside>
   )
 }

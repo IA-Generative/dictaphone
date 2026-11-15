@@ -1,6 +1,11 @@
-import React, { useCallback, useMemo } from 'react'
+import { AiJobFailureAlert } from '@/components/AiJobFailureAlert'
+import { TranscriptErrorAlert } from '@/components/TranscriptErrorAlert'
+import { useCooldown } from '@/api/useCooldown'
+import { isRateLimitError } from '@/api/rateLimits'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -15,6 +20,7 @@ import type { RootStackParamList } from '@/navigation/types'
 import { useGetFile } from '@/features/files/api/getFile'
 import { getMainAiJobs } from '@/features/ai-jobs/utils/getMainAiJobs'
 import {
+  useCreateInDocsMutation,
   useOpenInDocsMutation,
   useTranscript,
 } from '@/features/ai-jobs/api/fetch'
@@ -32,6 +38,8 @@ import { InAppBrowser } from 'react-native-inappbrowser-reborn'
 import { AppText, typography } from '@/components/AppText'
 import { colors } from '@/components/colors'
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown'
+import { DEFAULT_DATA_POLICY, useConfigStore } from '@/services/configStore'
+import { CreateInDocsModal } from '@/components/CreateInDocsModal'
 
 type RecordingDetailsRouteProp = RouteProp<
   RootStackParamList,
@@ -45,7 +53,44 @@ export default function RecordingDetailsScreen() {
   const navigation = useNavigation<StackNavigationProp>()
   const { id } = route.params
   const { t } = useTranslation()
+  const docsBlocked = useCooldown('docsCreate').isBlocked
   const insets = useInsets()
+
+  const originalFileKeptDays = useConfigStore(
+    (state) =>
+      state.config?.data_policy?.original_file_data_delete_after_days ??
+      DEFAULT_DATA_POLICY.original_file_data_delete_after_days
+  )
+
+  const transcriptDataKeptFor = useConfigStore(
+    (state) =>
+      state.config?.data_policy?.file_auto_hard_delete_after_days ??
+      DEFAULT_DATA_POLICY.file_auto_hard_delete_after_days
+  )
+
+  const supportsSynchronousDocsCreation = useConfigStore(
+    (state) =>
+      state.config?.docs_integration_supports_synchroneous_calls ?? false
+  )
+
+  const [openMetaInfo, setOpenMetaInfo] = useState(false)
+  useEffect(() => {
+    if (openMetaInfo) {
+      Alert.alert(
+        t('recordings.dataPolicy.alertTitle'),
+        t('recordings.dataPolicy.alertDescription', {
+          originalDataKeptFor: originalFileKeptDays,
+          transcriptDataKeptFor: transcriptDataKeptFor,
+        }),
+        [
+          {
+            text: t('recordings.dataPolicy.alertAction'),
+            onPress: () => setOpenMetaInfo(false),
+          },
+        ]
+      )
+    }
+  }, [openMetaInfo, originalFileKeptDays, t, transcriptDataKeptFor])
 
   const recordingQ = useGetFile(id)
   const recording = recordingQ.data
@@ -54,56 +99,98 @@ export default function RecordingDetailsScreen() {
     () => getMainAiJobs(recordingQ.data?.ai_jobs),
     [recordingQ.data?.ai_jobs]
   )
+  const isTranscriptionQuotaExceeded =
+    lastAiJobTranscript?.status === 'failed' &&
+    lastAiJobTranscript.failure_reason === 'RATE_LIMIT_TRANSCRIPTION_EXCEEDED'
 
   const openInDocs = useOpenInDocsMutation()
+  const createInDocs = useCreateInDocsMutation()
+
+  const showDocsError = useCallback(
+    (
+      translationKey:
+        'recordings.createInDocsError' | 'recordings.openInDocsError'
+    ) => {
+      Alert.alert(t('recordings.menu.errorTitle'), t(translationKey))
+    },
+    [t]
+  )
+
+  const openDocsUrl = useCallback(
+    async (
+      docUrl: string,
+      errorTranslationKey:
+        'recordings.createInDocsError' | 'recordings.openInDocsError'
+    ) => {
+      try {
+        const isAvailable = await InAppBrowser.isAvailable()
+        if (isAvailable) {
+          await InAppBrowser.open(docUrl, {
+            // iOS Properties
+            preferredBarTintColor: colors.secondary,
+            preferredControlTintColor: 'white',
+            readerMode: false,
+            animated: true,
+            modalPresentationStyle: 'fullScreen',
+            modalTransitionStyle: 'coverVertical',
+            modalEnabled: true,
+            enableBarCollapsing: false,
+            // Android Properties
+            showTitle: false,
+            toolbarColor: colors.secondary,
+            secondaryToolbarColor: 'black',
+            navigationBarColor: 'black',
+            navigationBarDividerColor: 'white',
+            enableUrlBarHiding: true,
+          })
+        } else {
+          await Linking.openURL(docUrl)
+        }
+      } catch {
+        showDocsError(errorTranslationKey)
+      }
+    },
+    [showDocsError]
+  )
+
   const handleOpenInDocs = useCallback(() => {
-    if (lastAiJobTranscript?.id && lastAiJobTranscript.status === 'success') {
+    if (!lastAiJobTranscript?.id || lastAiJobTranscript.status !== 'success') {
+      return
+    }
+
+    if (lastAiJobTranscript.docs_app_id) {
       openInDocs.mutate(lastAiJobTranscript, {
-        onSuccess: async (res) => {
-          const isAvailable = await InAppBrowser.isAvailable()
-          if (isAvailable) {
-            await InAppBrowser.open(res.doc_url, {
-              // iOS Properties
-              preferredBarTintColor: colors.secondary,
-              preferredControlTintColor: 'white',
-              readerMode: false,
-              animated: true,
-              modalPresentationStyle: 'fullScreen',
-              modalTransitionStyle: 'coverVertical',
-              modalEnabled: true,
-              enableBarCollapsing: false,
-              // Android Properties
-              showTitle: false,
-              toolbarColor: colors.secondary,
-              secondaryToolbarColor: 'black',
-              navigationBarColor: 'black',
-              navigationBarDividerColor: 'white',
-              enableUrlBarHiding: true,
-            })
-          } else {
-            await Linking.openURL(res.doc_url)
-          }
+        onSuccess: (res) =>
+          void openDocsUrl(res.doc_url, 'recordings.openInDocsError'),
+        onError: () => showDocsError('recordings.openInDocsError'),
+      })
+      return
+    }
+
+    if (supportsSynchronousDocsCreation) {
+      createInDocs.mutate(lastAiJobTranscript, {
+        onSuccess: (res) =>
+          void openDocsUrl(res.doc_url, 'recordings.createInDocsError'),
+        onError: (error) => {
+          if (!isRateLimitError(error))
+            showDocsError('recordings.createInDocsError')
         },
       })
     }
-  }, [lastAiJobTranscript, openInDocs])
+  }, [
+    createInDocs,
+    lastAiJobTranscript,
+    openDocsUrl,
+    openInDocs,
+    showDocsError,
+    supportsSynchronousDocsCreation,
+  ])
 
   const transcriptQ = useTranscript(lastAiJobTranscript)
   const transcriptSegments = useMemo(
     () => buildTranscriptViewSegments(transcriptQ.data),
     [transcriptQ.data]
   )
-
-  const numberOfParticipants = useMemo(() => {
-    if (transcriptSegments.length === 0) {
-      return null
-    } else {
-      const speakers = new Set<string>(
-        transcriptSegments.map((el) => el.speaker).filter(Boolean) as string[]
-      )
-      return speakers.size
-    }
-  }, [transcriptSegments])
 
   const transcriptMarkdown = useMemo(() => {
     if (transcriptSegments.length === 0) {
@@ -130,6 +217,16 @@ export default function RecordingDetailsScreen() {
     }
   }, [transcriptMarkdown])
 
+  const canOpenInDocs =
+    lastAiJobTranscript?.status === 'success' &&
+    (Boolean(lastAiJobTranscript.docs_app_id) ||
+      supportsSynchronousDocsCreation)
+  const isDocsActionDisabled =
+    !canOpenInDocs ||
+    openInDocs.isPending ||
+    createInDocs.isPending ||
+    (!lastAiJobTranscript?.docs_app_id && docsBlocked)
+
   return (
     <View style={[styles.container, { paddingTop: insets.paddingTop }]}>
       <View style={styles.header}>
@@ -154,24 +251,26 @@ export default function RecordingDetailsScreen() {
         </AppText>
 
         {recording ? (
-          <RecordingMenu
-            fileId={recording.id}
-            currentTitle={recording.title}
-            aiJobs={recording.ai_jobs}
-            onDeleted={onDeleted}
-          />
+          <RecordingMenu recording={recording} onDeleted={onDeleted} />
         ) : (
           <View style={styles.iconButton} />
         )}
       </View>
 
       {recording && (
-        <View style={styles.metaRow}>
-          <View style={[styles.metaChip, { flexGrow: 1 }]}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.metaRow,
+            pressed && { backgroundColor: colors.backgroundSubtlePressed },
+          ]}
+          onPress={() => setOpenMetaInfo(true)}
+        >
+          <View style={styles.metaElement}>
             <Lucide
               name="calendar-days"
               size={16}
               color={colors.neutralSecondary}
+              style={styles.metaElementIcon}
             />
             <AppText
               variant="subtitle"
@@ -185,8 +284,13 @@ export default function RecordingDetailsScreen() {
             </AppText>
           </View>
 
-          <View style={styles.metaChip}>
-            <Lucide name="clock-3" size={16} color={colors.neutralSecondary} />
+          <View style={styles.metaElement}>
+            <Lucide
+              name="clock-3"
+              size={16}
+              color={colors.neutralSecondary}
+              style={styles.metaElementIcon}
+            />
             <AppText
               variant="subtitle"
               size="sm"
@@ -198,22 +302,31 @@ export default function RecordingDetailsScreen() {
                   end: recording.duration_seconds * 1000,
                 }),
               })}
-              {/*{formatDurationLabel(durationSeconds || 0)}*/}
             </AppText>
           </View>
-          {transcriptSegments.length > 0 && (
-            <View style={styles.metaChip}>
-              <Lucide name="users" size={16} color={colors.neutralSecondary} />
-              <AppText
-                variant="subtitle"
-                size="sm"
-                color={colors.neutralSecondary}
-              >
-                {numberOfParticipants ?? 0}
-              </AppText>
-            </View>
-          )}
-        </View>
+
+          <View style={styles.metaElement}>
+            <Lucide
+              name="history"
+              size={16}
+              color={colors.warning}
+              style={styles.metaElementIcon}
+            />
+
+            <AppText
+              variant="mutedWarning"
+              style={styles.warningDataPolicyText}
+            >
+              {recording.lifecycle_state === 'active'
+                ? t('recordings.dataPolicy.audioKeptUntil', {
+                    value: recording.original_file_file_delete_at,
+                  })
+                : t('recordings.dataPolicy.fileKeptUntil', {
+                    value: recording.will_auto_delete_at,
+                  })}
+            </AppText>
+          </View>
+        </Pressable>
       )}
 
       <ScrollView
@@ -225,12 +338,21 @@ export default function RecordingDetailsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.transcriptContainer}>
-          {transcriptQ.isPending ? (
+          <AiJobFailureAlert job={lastAiJobTranscript} />
+          {transcriptQ.isError ? (
+            <TranscriptErrorAlert
+              error={transcriptQ.error}
+              onRetry={() => void transcriptQ.refetch()}
+            />
+          ) : transcriptQ.isPending &&
+            lastAiJobTranscript?.status !== 'failed' ? (
             <ActivityIndicator />
           ) : transcriptSegments.length === 0 ? (
-            <AppText variant="muted" size="md" color={colors.neutralTertiary}>
-              {t('transcript.notAvailable')}
-            </AppText>
+            !isTranscriptionQuotaExceeded && (
+              <AppText variant="muted" size="md" color={colors.neutralTertiary}>
+                {t('transcript.notAvailable')}
+              </AppText>
+            )
           ) : (
             <EnrichedMarkdownText
               selectable={true}
@@ -241,7 +363,7 @@ export default function RecordingDetailsScreen() {
               markdown={transcriptSegments
                 .map(
                   (segment) =>
-                    `**${formatTimestamp(segment.start ?? -1)} · ${t('transcript.speaker')} ${segment.speaker}**  ${segment.text.trim()}`
+                    `**${formatTimestamp(segment.start ?? -1)}${segment.speaker ? ` · ${t('transcript.speaker')} ${segment.speaker}` : ''}**  ${segment.text.trim()}`
                 )
                 .join('\n\n')}
             />
@@ -261,10 +383,9 @@ export default function RecordingDetailsScreen() {
               style={({ pressed }) => [
                 styles.openInDocsButton,
                 pressed && styles.openInDocsButtonPressed,
-                !lastAiJobTranscript?.docs_app_id &&
-                  styles.openInDocsButtonDisabled,
+                isDocsActionDisabled && styles.openInDocsButtonDisabled,
               ]}
-              disabled={!lastAiJobTranscript?.docs_app_id}
+              disabled={isDocsActionDisabled}
               onPress={handleOpenInDocs}
             >
               <DocsIcon />
@@ -286,6 +407,7 @@ export default function RecordingDetailsScreen() {
           </View>
         </View>
       )}
+      <CreateInDocsModal isVisible={createInDocs.isPending} />
     </View>
   )
 }
@@ -327,27 +449,34 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     display: 'flex',
-    marginHorizontal: 8,
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    rowGap: 8,
+    columnGap: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderRadius: 6,
-    marginBottom: 12,
-    overflow: 'hidden',
+    marginBottom: 8,
+    marginHorizontal: 8,
+    flexWrap: 'wrap',
     backgroundColor: colors.backgroundNeutralTertiary,
-    borderWidth: 1,
-    borderColor: colors.backgroundBase,
-  },
-  metaChip: {
     minHeight: 40,
-    flexGrow: 0.9,
+  },
+  metaElement: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    borderRightWidth: 1,
-    borderRightColor: colors.backgroundBase,
   },
-  transcriptContainer: {
-    paddingTop: 2,
+  metaElementIcon: {
+    marginBottom: -2,
+  },
+  popover: { borderRadius: 12, position: 'static' },
+  transcriptContainer: {},
+  warningDataPolicyText: {
+    flexShrink: 1,
+    textAlign: 'center',
   },
   paragraph: {
     marginBottom: 18,
@@ -364,6 +493,7 @@ const styles = StyleSheet.create({
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
+    maxWidth: 500,
     gap: 8,
     width: '100%',
     paddingHorizontal: 8,

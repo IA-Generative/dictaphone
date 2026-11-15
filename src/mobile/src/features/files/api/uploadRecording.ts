@@ -1,4 +1,6 @@
 import { API_URL } from '@/api/constants'
+import { ApiError } from '@/api/ApiError'
+import { parseRetryAfter, recordRateLimit } from '@/api/rateLimits'
 import { getDeviceToken } from '@/services/deviceTokenService'
 import { useDeviceStore } from '@/features/device/store'
 import type { UploadProgressCallback } from '@/utils/fileUpload'
@@ -15,14 +17,16 @@ export type UploadResponse = {
 // remaining non-[A-Za-z0-9._-] becomes a hyphen, and consecutive
 // separators are collapsed.
 function sanitizeFilename(filename: string): string {
-  return filename
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '') // strip combining marks (accents)
-    .replace(/['`’]/g, '') // smart/regular apostrophes
-    .replace(/[^A-Za-z0-9._-]+/g, '_') // remaining non-ASCII / punctuation → _
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    .slice(0, 200) || 'audio.m4a'
+  return (
+    filename
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '') // strip combining marks (accents)
+      .replace(/['`’]/g, '') // smart/regular apostrophes
+      .replace(/[^A-Za-z0-9._-]+/g, '_') // remaining non-ASCII / punctuation → _
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .slice(0, 200) || 'audio.m4a'
+  )
 }
 
 function guessMimeType(filename: string): string {
@@ -115,14 +119,29 @@ export async function uploadRecordingToMirai({
         }
         return
       }
-      let message = `Upload failed (HTTP ${xhr.status})`
+      // Reject with an ApiError so the upload manager classifies the failure
+      // (retry with backoff on 5xx/408, block on 401/403/4xx, pause on 429).
+      // The server's `error` field becomes the message shown on the row.
+      let body: unknown = xhr.responseText
       try {
-        const body = JSON.parse(xhr.responseText) as { error?: string }
-        if (body.error) message = body.error
+        body = JSON.parse(xhr.responseText)
       } catch {
-        /* keep generic */
+        /* keep raw text */
       }
-      reject(new Error(message))
+      const retryAt =
+        xhr.status === 429
+          ? parseRetryAfter(xhr.getResponseHeader('Retry-After'))
+          : null
+      if (xhr.status === 429) recordRateLimit('upload', retryAt)
+      const error = new ApiError(xhr.status, body, retryAt, {
+        method: 'POST',
+        path: '/api/upload/[qr_token]',
+      })
+      const serverMessage = (body as { error?: unknown } | null)?.error
+      if (typeof serverMessage === 'string' && serverMessage) {
+        error.message = serverMessage
+      }
+      reject(error)
     }
 
     xhr.onerror = () => {

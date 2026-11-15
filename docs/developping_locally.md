@@ -12,7 +12,7 @@ These components rely on a few key services:
 
 - PostgreSQL for storing data (users, recordings, AI jobs results)
 - Redis for caching and inter-service communication
-- MinIO for storing files (room recordings)
+- RustFS for storing files (recordings)
 - Celery workers to handle async jobs
 
 We provide two stack options for getting Dictaphone up and running for development:
@@ -66,6 +66,22 @@ Docker Compose version v5.1.3
 make bootstrap FLUSH_ARGS='--no-input'
 ```
 
+`make create-env-files` copies missing `env.d/development/*.dist` templates to
+their local counterparts without overwriting existing files. Edit the local
+files to customize the stack:
+
+| File | Settings |
+| --- | --- |
+| `common` | Backend settings, including external-source URL restrictions |
+| `audio-extractor` | Shared backend/worker tokens and lease timeout, worker limits, storage gateway URL, and gateway rules and limits |
+| `rustfs`, `keycloak` | Local storage and identity-provider configuration |
+
+The backend, workers, and S3 gateway share the `audio-extractor` file. Each worker
+selects its mode’s token; an explicit `AUDIO_EXTRACTOR_TOKEN` overrides that choice.
+The worker lease timeout references the shared backend timeout. Set `S3_GATEWAY_URL=` in `audio-extractor` to enable
+direct storage access. Recreate affected containers after changing local files.
+Container roles, internal backend URLs, and build arguments remain in Compose.
+
 2. Access the project:
 
 - The frontend is available at [http://localhost:3000](http://localhost:3000) with the default credentials:
@@ -75,6 +91,22 @@ make bootstrap FLUSH_ARGS='--no-input'
 - The Django admin is available at [http://localhost:8071/admin](http://localhost:8071/admin)
   - username: admin@example.com
   - password: admin
+
+The original `dictaphone` user and `dictaphone-media-storage` bucket remain available for testing the default configuration.
+
+Both Compose and Tilt's Keycloak environment enable the OIDC role access filter.
+Existing users below remain allowed. Use `user-restricted` / `password-restricted`
+to test rejected registration; if its application account already exists, it
+can sign in but cannot upload or retry. See
+[local Keycloak access control](access-control.md#local-keycloak-development)
+for the roles, email bypasses, and updating an existing Keycloak realm.
+
+The local stack also includes two domain-specific test users:
+
+| Username | Email | Password | Storage bucket |
+| --- | --- | --- | --- |
+| `user-domain-alpha` | `user@alpha.example` | `password-domain-alpha` | `dictaphone-media-alpha` |
+| `user-domain-beta` | `user@beta.example` | `password-domain-beta` | `dictaphone-media-beta` |
 
 ---
 
@@ -153,6 +185,12 @@ make start-tilt-keycloak
 ```
 
 Monitor Tilt’s progress at [http://localhost:10350/](http://localhost:10350/). After Tilt actions finish, you can access the app at [https://dictaphone.127.0.0.1.nip.io/](https://dictaphone.127.0.0.1.nip.io/).
+
+The local Kubernetes Django admin is available at
+[https://dictaphone.127.0.0.1.nip.io/admin/](https://dictaphone.127.0.0.1.nip.io/admin/)
+with email `admin@example.com`. The password is configured by
+`djangoSuperuserPassword` in `src/helm/env.d/dev-keycloak/values.secrets.yaml`
+and passed to the container as `DJANGO_SUPERUSER_PASSWORD`.
 
 ### Connecting the Summary component
 
