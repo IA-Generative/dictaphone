@@ -30,6 +30,7 @@ import { deleteLocalRecordingFile } from '@/utils/localRecordingFile'
 import { AppText } from './AppText'
 import { colors } from './colors'
 import { VuMeter } from './VuMeter'
+import { audioLevelFromSamples } from '@/utils/audioLevel'
 import { useResetNavigationHistory } from '@/navigation/useRestNavigationHistory' // @ts-expect-error SVG
 import PauseIcon from '@/assets/icons/pause-recording.svg' // @ts-expect-error SVG
 import StopIcon from '@/assets/icons/stop-recording.svg' // @ts-expect-error SVG
@@ -639,23 +640,19 @@ export const AudioRecorder = () => {
 
     // Match the recorder's default 2 channels: with a mismatched channel count
     // the callback never fires.
-    audioRecorder.onAudioReady(
+    const result = audioRecorder.onAudioReady(
       { sampleRate: 48000, bufferLength: 2048, channelCount: 2 },
       (event) => {
         try {
-          const samples = event.buffer.getChannelData(0)
-          let sumSquares = 0
-          for (let i = 0; i < samples.length; i++) {
-            sumSquares += samples[i] * samples[i]
-          }
-          const rms = Math.sqrt(sumSquares / samples.length)
-          // A normal speaking voice sits around RMS 0.05-0.15.
-          setAudioLevel(Math.min(1, rms * 4))
+          setAudioLevel(audioLevelFromSamples(event.buffer.getChannelData(0)))
         } catch (error) {
           console.warn('VU meter sample read failed', error)
         }
       }
     )
+    if (result.status === 'error') {
+      console.warn('VU meter unavailable:', result.message)
+    }
 
     return () => {
       audioRecorder.clearOnAudioReady()

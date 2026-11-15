@@ -10,13 +10,18 @@ type VuMeterProps = {
 }
 
 // Minimal LED-style level meter. Stateless, redraws on each level update.
-// Blue for nominal levels, yellow above ~70 %, red above ~90 %.
+// Primary color for nominal levels, warning above ~70 %, error above ~90 %.
 export function VuMeter({ level }: VuMeterProps) {
   const safeLevel = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0
   const litCount = Math.round(safeLevel * BAR_COUNT)
 
   return (
-    <View style={styles.container}>
+    // Purely visual feedback: hidden from screen readers.
+    <View
+      style={styles.container}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
       {Array.from({ length: BAR_COUNT }, (_, i) => {
         const isLit = i < litCount
         let activeColor: string = colors.primary
