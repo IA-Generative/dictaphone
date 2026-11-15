@@ -19,7 +19,7 @@
 //     succeed. pipeline: "ok" (default) or "infected" (virus found).
 //
 // Env: PORT (4010), E2E_SIMPLE_CODE (E2E123), E2E_QR_TOKEN,
-//      E2E_STEP_MS (delay between pipeline statuses, 1000),
+//      E2E_STEP_MS (delay between pipeline statuses, 2000),
 //      E2E_UPLOAD_STATUS (HTTP status forced on uploads, unset = 200),
 //      E2E_FINAL_STATUS (kevent_completed).
 import { createServer } from 'node:http'
@@ -29,7 +29,7 @@ import { Server } from 'socket.io'
 const PORT = Number(process.env.PORT ?? 4010)
 const SIMPLE_CODE = (process.env.E2E_SIMPLE_CODE ?? 'E2E123').toUpperCase()
 const QR_TOKEN = process.env.E2E_QR_TOKEN ?? 'e2e_qr_token_0123456789'
-const STEP_MS = Number(process.env.E2E_STEP_MS ?? 1000)
+const STEP_MS = Number(process.env.E2E_STEP_MS ?? 2000)
 const FORCED_UPLOAD_STATUS = Number(process.env.E2E_UPLOAD_STATUS ?? 0)
 const FINAL_STATUS = process.env.E2E_FINAL_STATUS ?? 'kevent_completed'
 const PIPELINES = {
