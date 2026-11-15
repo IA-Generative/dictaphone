@@ -141,12 +141,25 @@ jobs:
           xcrun simctl install "$UDID" ios/build/Build/Products/Release-iphonesimulator/*.app
 
       - name: Run Maestro flows
-        run: maestro test e2e/maestro --format junit --output maestro-report.xml --debug-output maestro-debug
+        env:
+          MAESTRO_CLI_NO_ANALYTICS: "1"
+        run: >-
+          maestro test e2e/maestro
+          --format junit --output maestro-report.xml
+          --test-output-dir maestro-output --debug-output maestro-debug
 
       - name: Check what the mock DMZ received
         run: |
           curl -fs http://localhost:4010/__e2e/state | tee mock-state.json
           jq -e '(.enrollments | length) >= 1 and (.uploads | length) >= 1' mock-state.json
+
+      - name: Collect simulator diagnostics
+        if: failure()
+        run: |
+          mkdir -p maestro-output
+          xcrun simctl io booted screenshot maestro-output/zz-failure.png || true
+          xcrun simctl spawn booted log show --last 15m --style compact \
+            --predicate 'process == "Assistant Transcripts"' > maestro-output/app.log 2>&1 || true
 
       - name: Upload e2e report
         if: always()
@@ -155,10 +168,10 @@ jobs:
           name: e2e-report
           path: |
             src/mobile/maestro-report.xml
+            src/mobile/maestro-output
             src/mobile/maestro-debug
             src/mobile/mock-dmz.log
             src/mobile/mock-state.json
-            ~/.maestro/tests
           retention-days: 7
           if-no-files-found: ignore
 

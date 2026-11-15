@@ -181,6 +181,11 @@ const routes = async (req, res) => {
 
 const server = createServer((req, res) => {
   if (req.url?.startsWith('/socket.io/')) return // handled by Socket.IO
+  res.on('finish', () => {
+    console.log(
+      `${new Date().toISOString()} ${req.method} ${req.url} -> ${res.statusCode}`
+    )
+  })
   routes(req, res).catch((error) => {
     console.error(error)
     send(res, 500, { error: 'mock_failure' })
@@ -189,7 +194,9 @@ const server = createServer((req, res) => {
 
 io.attach(server)
 io.on('connection', (socket) => {
+  console.log(`${new Date().toISOString()} socket connected ${socket.id}`)
   socket.on('join', ({ qr_token: qrToken } = {}) => {
+    console.log(`${new Date().toISOString()} socket join ${qrToken}`)
     if (qrToken) socket.join(qrToken)
   })
 })

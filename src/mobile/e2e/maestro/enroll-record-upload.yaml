@@ -1,10 +1,14 @@
 # Parcours principal MIrAI contre le faux serveur DMZ (e2e/mock-dmz) :
 # enrôlement par code court, enregistrement, upload, suivi du pipeline
 # serveur jusqu'à la disparition de la ligne.
+# Les commandes visent des testID (indépendants de la langue) ; les statuts
+# du pipeline sont reconnus en anglais et en français.
 appId: fr.gouv.mirai.audio-secure
 name: Enrôlement, enregistrement et upload
 env:
   SIMPLE_CODE: E2E123
+  PIPELINE_STATUS: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete|Analyse antivirale|Fichier sain|Transcodage|Intégré à votre compte|Transcription terminée).*'
+  DONE_STATUS: '.*(Transcription complete|Transcription terminée).*'
 ---
 - launchApp:
     clearState: true
@@ -12,38 +16,48 @@ env:
     permissions:
       microphone: allow
       notifications: allow
+- takeScreenshot: 01-login
 
 # Enrôlement par code court (le QR n'est pas scannable sur simulateur)
-- tapOn: 'Enter a code'
-- tapOn: 'ABC123'
+- tapOn:
+    id: login-enter-code
+- tapOn:
+    id: code-input
 - inputText: ${SIMPLE_CODE}
-- tapOn: 'Validate'
+- pressKey: Enter
+- takeScreenshot: 02-code-submitted
 - extendedWaitUntil:
-    visible: 'New recording'
-    timeout: 15000
+    visible:
+      id: new-recording
+    timeout: 20000
+- takeScreenshot: 03-home
 
 # Enregistrement de quelques secondes
-- tapOn: 'New recording'
+- tapOn:
+    id: new-recording
 - extendedWaitUntil:
-    visible: 'Recording in progress'
-    timeout: 15000
-- takeScreenshot: recording
+    visible:
+      id: recording-end
+    timeout: 20000
+- takeScreenshot: 04-recording
 # Pas de « sleep » dans Maestro : on attend un élément qui n'apparaîtra pas.
 - extendedWaitUntil:
     visible: 'e2e-never-visible'
     timeout: 4000
     optional: true
-- tapOn: 'End'
+- tapOn:
+    id: recording-end
 
 # Upload puis pipeline serveur (statuts poussés par Socket.IO)
 - extendedWaitUntil:
-    visible: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete).*'
+    visible: ${PIPELINE_STATUS}
     timeout: 30000
-- takeScreenshot: pipeline
+- takeScreenshot: 05-pipeline
 - extendedWaitUntil:
-    visible: '.*Transcription complete.*'
+    visible: ${DONE_STATUS}
     timeout: 30000
+- takeScreenshot: 06-done
 # La ligne disparaît quelques secondes après le succès final.
 - extendedWaitUntil:
-    notVisible: '.*Transcription complete.*'
+    notVisible: ${DONE_STATUS}
     timeout: 15000

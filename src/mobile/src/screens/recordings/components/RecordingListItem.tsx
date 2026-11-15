@@ -612,6 +612,7 @@ export function RecordingListItem({
                 {item.title}
               </AppText>
               <AppText
+                testID={`recording-meta-${item.id}`}
                 variant="muted"
                 size="md"
                 numberOfLines={

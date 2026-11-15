@@ -1089,6 +1089,7 @@ export const AudioRecorder = () => {
             void onStopRecord()
           }}
           disabled={isLoading}
+          testID="recording-end"
         >
           <StopIcon />
           <AppText variant="button">{t('home.end')}</AppText>

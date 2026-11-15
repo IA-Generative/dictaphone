@@ -66,9 +66,14 @@ export default function CodeEntryScreen() {
           maxLength={12}
           style={styles.input}
           editable={!loading}
+          returnKeyType="go"
+          onSubmitEditing={() => {
+            if (code) void onSubmit()
+          }}
+          testID="code-input"
         />
         {error ? (
-          <AppText variant="body" size="sm" align="center">
+          <AppText variant="body" size="sm" align="center" testID="code-error">
             {error}
           </AppText>
         ) : null}
@@ -83,6 +88,7 @@ export default function CodeEntryScreen() {
             void onSubmit()
           }}
           disabled={loading || !code}
+          testID="code-submit"
         >
           {loading ? (
             <ActivityIndicator color="white" />
