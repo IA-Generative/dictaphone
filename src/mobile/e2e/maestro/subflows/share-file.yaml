@@ -1,0 +1,5 @@
+# Met en file /tmp/mirai-e2e/${FILE} comme un fichier partagé vers l'app
+# (lien e2e-ingest, builds E2E uniquement).
+appId: fr.gouv.mirai.audio-secure
+---
+- openLink: fr-gouv-assistant-transcripts://e2e-ingest?path=/tmp/mirai-e2e/${FILE}

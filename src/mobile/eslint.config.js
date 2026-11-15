@@ -61,5 +61,13 @@ export default [
     },
   },
 
+  // Maestro scripts run in Maestro's JS engine (http, env variables).
+  {
+    files: ['e2e/maestro/scripts/*.js'],
+    languageOptions: {
+      globals: { http: 'readonly', SCENARIO: 'readonly' },
+    },
+  },
+
   prettier,
 ]

@@ -1,17 +1,19 @@
-# Enrôlement puis envoi d'un fichier « partagé » vers l'app (lien e2e-ingest,
-# builds E2E uniquement) et suivi du pipeline. N'utilise pas le micro :
-# c'est le parcours joué en CI. Préparer le fichier avec e2e/prepare-fixture.sh.
+# Enrôlement puis envoi d'un fichier « partagé » vers l'app et suivi du
+# pipeline jusqu'au bout. N'utilise pas le micro : joué en CI.
 appId: fr.gouv.mirai.audio-secure
-name: Enrôlement et upload d'un fichier partagé
+name: Upload d'un fichier partagé
 tags:
   - ci
 env:
   SIMPLE_CODE: E2E123
 ---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{}'
 - runFlow: subflows/enroll-by-code.yaml
-- openLink: fr-gouv-assistant-transcripts://e2e-ingest?path=/tmp/mirai-e2e/reunion-e2e.m4a
-# iOS peut demander confirmation avant d'ouvrir le lien.
-- tapOn:
-    text: "(Open|Ouvrir)"
-    optional: true
+- runFlow:
+    file: subflows/share-file.yaml
+    env:
+      FILE: reunion-ok.m4a
 - runFlow: subflows/follow-pipeline.yaml

@@ -3,9 +3,19 @@
 Parcours Maestro contre un faux serveur DMZ, sur simulateur iOS.
 
 - `mock-dmz/server.mjs` : imite `mobile-upload-pwa` (mêmes routes, en-têtes et formats) : code court, enrôlement, session, heartbeat, upload multipart, événements Socket.IO `file_status`. `GET /__e2e/state` donne ce que l'app a envoyé, `POST /__e2e/reset` remet le serveur à zéro.
-- `maestro/upload-shared-file.yaml` (tag `ci`) : enrôlement par code, puis envoi d'un fichier comme s'il avait été partagé vers l'app, puis suivi du pipeline jusqu'à la disparition de la ligne. C'est le parcours joué en CI, sans micro.
-- `maestro/enroll-record-upload.yaml` (tag `microphone`) : même chose avec un vrai enregistrement. Il faut un micro fonctionnel dans le simulateur, donc local uniquement.
-- `maestro/subflows/` : étapes communes.
+  Parcours (`maestro/`). Chacun commence par remettre à zéro le faux serveur et lui donner son scénario :
+
+| Parcours                    | Tag            | Vérifie                                                                                                     |
+| --------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `upload-shared-file.yaml`   | `ci`           | enrôlement par code, fichier partagé vers l'app, pipeline complet, puis disparition de la ligne             |
+| `error-upload-401.yaml`     | `ci`, `errors` | upload refusé en 401 : ligne bloquée avec le message du serveur, puis Réessayer et envoi terminé            |
+| `error-upload-429.yaml`     | `ci`, `errors` | 429 avec Retry-After : alerte, « Envois en pause », fichier conservé, puis reprise automatique à l'échéance |
+| `error-virus.yaml`          | `ci`, `errors` | virus détecté par la DMZ : ligne bloquée avec le message, puis suppression confirmée                        |
+| `enroll-record-upload.yaml` | `microphone`   | même chose avec un vrai enregistrement ; il faut un micro dans le simulateur, donc local uniquement         |
+
+`maestro/subflows/` contient les étapes communes (enrôlement, partage de fichier, suivi du pipeline). `maestro/scripts/set-scenario.js` pilote le faux serveur : `POST /__e2e/scenario`, par exemple `{"uploadFailures":1,"uploadStatus":401,"uploadError":"…"}`, `{"retryAfter":20}` ou `{"pipeline":"infected"}`.
+
+Sur un écran immobile, Maestro 2.11 abrège les attentes (`extendedWaitUntil` rend la main au bout d'environ une seconde). Pour attendre une disparition, les parcours interrogent donc l'écran en boucle (`repeat` / `while`).
 
 ## Build E2E
 
@@ -20,7 +30,7 @@ L'app doit être **signée ad hoc** (`CODE_SIGN_IDENTITY=-`), pas seulement comp
 
 ```bash
 cd src/mobile
-e2e/prepare-fixture.sh                               # /tmp/mirai-e2e/reunion-e2e.m4a
+e2e/prepare-fixture.sh                               # /tmp/mirai-e2e/reunion-*.m4a
 node e2e/mock-dmz/server.mjs &                       # http://localhost:4010, code E2E123
 cd ios && MIRAI_E2E=1 MIRAI_API_URL=http://localhost:4010 xcodebuild \
   -workspace AssistantTranscripts.xcworkspace -scheme AssistantTranscripts \

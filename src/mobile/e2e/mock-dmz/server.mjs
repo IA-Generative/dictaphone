@@ -11,10 +11,15 @@
 //   Socket.IO `join` {qr_token}      then `file_status` events per upload
 // Test helpers:
 //   GET  /__e2e/state                uploads and enrollments seen so far
-//   POST /__e2e/reset                forget everything
+//   POST /__e2e/reset                forget everything (scenario included)
+//   POST /__e2e/scenario             { uploadFailures, uploadStatus,
+//                                      uploadError, retryAfter, pipeline }
+//     The next `uploadFailures` uploads get `uploadStatus` (+ Retry-After
+//     when `retryAfter` is set) and { error: uploadError }, then uploads
+//     succeed. pipeline: "ok" (default) or "infected" (virus found).
 //
 // Env: PORT (4010), E2E_SIMPLE_CODE (E2E123), E2E_QR_TOKEN,
-//      E2E_STEP_MS (delay between pipeline statuses, 400),
+//      E2E_STEP_MS (delay between pipeline statuses, 1000),
 //      E2E_UPLOAD_STATUS (HTTP status forced on uploads, unset = 200),
 //      E2E_FINAL_STATUS (kevent_completed).
 import { createServer } from 'node:http'
@@ -24,19 +29,35 @@ import { Server } from 'socket.io'
 const PORT = Number(process.env.PORT ?? 4010)
 const SIMPLE_CODE = (process.env.E2E_SIMPLE_CODE ?? 'E2E123').toUpperCase()
 const QR_TOKEN = process.env.E2E_QR_TOKEN ?? 'e2e_qr_token_0123456789'
-const STEP_MS = Number(process.env.E2E_STEP_MS ?? 400)
+const STEP_MS = Number(process.env.E2E_STEP_MS ?? 1000)
 const FORCED_UPLOAD_STATUS = Number(process.env.E2E_UPLOAD_STATUS ?? 0)
 const FINAL_STATUS = process.env.E2E_FINAL_STATUS ?? 'kevent_completed'
-const PIPELINE = [
-  'scanning',
-  'scan_clean',
-  'transcoding',
-  'transferred',
-  FINAL_STATUS,
-]
+const PIPELINES = {
+  ok: ['scanning', 'scan_clean', 'transcoding', 'transferred', FINAL_STATUS],
+  infected: ['scanning', 'scan_infected'],
+}
+const STATUS_MESSAGES = {
+  [FINAL_STATUS]: 'Disponible dans mes-réunions',
+  scan_infected: 'Fichier infecté (EICAR-Test-File)',
+}
+const DEFAULT_SCENARIO = {
+  uploadFailures: 0,
+  uploadStatus: 500,
+  uploadError: '',
+  retryAfter: null,
+  pipeline: 'ok',
+}
+let scenario = { ...DEFAULT_SCENARIO }
 
 const SESSION_EXPIRES_AT = new Date(Date.now() + 7 * 86400_000).toISOString()
-const state = { enrollments: [], uploads: [], heartbeats: 0, sessionCalls: 0 }
+const newState = () => ({
+  enrollments: [],
+  uploads: [],
+  rejectedUploads: 0,
+  heartbeats: 0,
+  sessionCalls: 0,
+})
+let state = newState()
 const deviceTokens = new Set()
 
 const send = (res, status, body, headers = {}) => {
@@ -68,16 +89,15 @@ const multipartFilename = (body, contentType) => {
 
 const io = new Server({ cors: { origin: '*' } })
 
-const runPipeline = (fileId, filename) => {
-  PIPELINE.forEach((status, i) => {
+const runPipeline = (fileId, filename, pipeline) => {
+  ;(PIPELINES[pipeline] ?? PIPELINES.ok).forEach((status, i) => {
     setTimeout(
       () => {
         io.to(QR_TOKEN).emit('file_status', {
           file_id: fileId,
           name: filename,
           status,
-          message:
-            status === FINAL_STATUS ? 'Disponible dans mes-réunions' : '',
+          message: STATUS_MESSAGES[status] ?? '',
         })
       },
       STEP_MS * (i + 1)
@@ -148,6 +168,21 @@ const routes = async (req, res) => {
     if (!authorized(req))
       return send(res, 401, { error: 'Appareil non autorisé' })
     if (qr !== QR_TOKEN) return send(res, 404, { error: 'Session inconnue' })
+    if (scenario.uploadFailures > 0) {
+      scenario.uploadFailures -= 1
+      state.rejectedUploads += 1
+      return send(
+        res,
+        scenario.uploadStatus,
+        {
+          error:
+            scenario.uploadError || `Erreur simulée ${scenario.uploadStatus}`,
+        },
+        scenario.retryAfter
+          ? { 'Retry-After': String(scenario.retryAfter) }
+          : {}
+      )
+    }
     if (FORCED_UPLOAD_STATUS) {
       return send(res, FORCED_UPLOAD_STATUS, {
         error: `Erreur simulée ${FORCED_UPLOAD_STATUS}`,
@@ -162,19 +197,24 @@ const routes = async (req, res) => {
       bytes: body.length,
       at: Date.now(),
     })
-    runPipeline(fileId, filename)
+    runPipeline(fileId, filename, scenario.pipeline)
     return send(res, 200, { file_id: fileId, filename, status: 'pending' })
   }
 
   if (req.method === 'GET' && path === '/__e2e/state')
-    return send(res, 200, state)
+    return send(res, 200, { ...state, scenario })
   if (req.method === 'POST' && path === '/__e2e/reset') {
-    state.enrollments = []
-    state.uploads = []
-    state.heartbeats = 0
-    state.sessionCalls = 0
+    state = newState()
+    scenario = { ...DEFAULT_SCENARIO }
     deviceTokens.clear()
     return send(res, 204, '')
+  }
+  if (req.method === 'POST' && path === '/__e2e/scenario') {
+    scenario = {
+      ...DEFAULT_SCENARIO,
+      ...JSON.parse((await readBody(req)).toString() || '{}'),
+    }
+    return send(res, 200, scenario)
   }
   if (req.method === 'GET' && path === '/healthz')
     return send(res, 200, { status: 'ok' })

@@ -1,0 +1,39 @@
+# L'antivirus de la DMZ détecte un virus : la ligne est bloquée avec le
+# message du serveur ; l'utilisateur peut la supprimer.
+appId: fr.gouv.mirai.audio-secure
+name: Virus détecté puis suppression
+tags:
+  - ci
+  - errors
+env:
+  SIMPLE_CODE: E2E123
+---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{"pipeline":"infected"}'
+- runFlow: subflows/enroll-by-code.yaml
+- runFlow:
+    file: subflows/share-file.yaml
+    env:
+      FILE: reunion-virus.m4a
+- extendedWaitUntil:
+    visible: '.*Fichier infecté \(EICAR-Test-File\).*'
+    timeout: 30000
+- assertVisible:
+    id: 'delete-blocked-.*'
+- takeScreenshot: blocked-virus
+- tapOn:
+    id: 'delete-blocked-.*'
+# Confirmation : le bouton de l'alerte, pas celui de la ligne (même libellé).
+- tapOn:
+    text: '(Delete|Supprimer)'
+    below: '(Delete this recording.*|Supprimer cet enregistrement.*)'
+- repeat:
+    while:
+      visible: '.*Fichier infecté.*'
+    times: 20
+    commands:
+      - waitForAnimationToEnd:
+          timeout: 500
+- assertNotVisible: '.*Fichier infecté.*'

@@ -8,6 +8,10 @@ tags:
 env:
   SIMPLE_CODE: E2E123
 ---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{}'
 - runFlow: subflows/enroll-by-code.yaml
 - tapOn:
     id: new-recording
@@ -18,7 +22,7 @@ env:
 - takeScreenshot: recording
 # Pas de « sleep » dans Maestro : on attend un élément qui n'apparaîtra pas.
 - extendedWaitUntil:
-    visible: "e2e-never-visible"
+    visible: 'e2e-never-visible'
     timeout: 4000
     optional: true
 - tapOn:

@@ -1,0 +1,29 @@
+# Le serveur limite le débit (429 + Retry-After) : l'app prévient, met les
+# envois en pause sans perdre le fichier, puis reprend seule à l'échéance.
+appId: fr.gouv.mirai.audio-secure
+name: Erreur 429 puis reprise automatique
+tags:
+  - ci
+  - errors
+env:
+  SIMPLE_CODE: E2E123
+---
+- runScript:
+    file: scripts/set-scenario.js
+    env:
+      SCENARIO: '{"uploadFailures":1,"uploadStatus":429,"retryAfter":20}'
+- runFlow: subflows/enroll-by-code.yaml
+- runFlow:
+    file: subflows/share-file.yaml
+    env:
+      FILE: reunion-429.m4a
+# Alerte native « trop de requêtes »
+- extendedWaitUntil:
+    visible: '(Too many requests\. Please wait\.|Trop de requêtes\. Veuillez patienter\.)'
+    timeout: 30000
+- takeScreenshot: rate-limit-alert
+- tapOn: 'OK'
+- assertVisible: '.*(Uploads paused|Envois en pause).*'
+- takeScreenshot: uploads-paused
+# Reprise automatique à l'échéance du Retry-After, sans action.
+- runFlow: subflows/follow-pipeline.yaml
