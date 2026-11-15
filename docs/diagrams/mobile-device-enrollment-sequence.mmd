@@ -1,0 +1,29 @@
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant W as Web app (SSO session)
+    participant B as Backend
+    participant M as Mobile app
+    participant K as Keychain / Keystore
+
+    Note over U,W: Already signed in on a computer<br/>(ProConnect, Keycloak, Passage2...)
+    U->>W: "Add a device"
+    W->>B: POST /devices/enrollment-codes/ (session)
+    B-->>W: qr_token (one-time, ~5 min), simple_code, expires_at
+    W-->>U: QR code = https://host/enroll/{qr_token}<br/>+ 6-character code
+
+    U->>M: Scan the QR (or type the code)
+    M->>K: get or create device_key (random, never leaves the device)
+    M->>B: POST /devices/enroll/ {qr_token, device_key, device_name}
+    B->>B: consume qr_token (single use)<br/>create Device(user, key hash, name)
+    B-->>M: device credential (refresh token bound to the Device)
+    M->>K: store credential (this device only)
+
+    loop Normal use
+        M->>B: API calls / uploads with short-lived access token
+        M->>B: refresh with the device credential (proves device_key)
+    end
+
+    U->>W: "My devices" → revoke
+    W->>B: POST /devices/{id}/revoke/
+    B-->>M: next refresh → 401, app returns to the enrollment screen
