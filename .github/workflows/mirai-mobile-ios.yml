@@ -241,7 +241,8 @@ jobs:
           }
           # One retry only, for driver start-up flakiness; a real failure
           # fails twice.
-          run || { echo "::warning::Maestro failed, retrying once"; curl -fs -X POST http://localhost:4010/__e2e/reset; run; }
+          # The app deletes each fixture once done: rebuild them for the retry.
+          run || { echo "::warning::Maestro failed, retrying once"; e2e/prepare-fixture.sh; run; }
 
       - name: Check what the mock DMZ received
         run: |

@@ -5,6 +5,11 @@ env:
   PIPELINE_STATUS: '.*(Antivirus scan|Clean, transcoding|Transcoding|Available in your account|Transcription complete|Analyse antivirale|Fichier sain|Transcodage|Intégré à votre compte|Transcription terminée).*'
   DONE_STATUS: '.*(Transcription complete|Transcription terminée).*'
 ---
+# Fichier reçu par le serveur : la ligne attend le pipeline (« En attente »).
+- extendedWaitUntil:
+    visible: '.*(Pending|En attente).*'
+    timeout: 60000
+- runScript: ../scripts/release-pipeline.js
 - extendedWaitUntil:
     visible: ${PIPELINE_STATUS}
     timeout: 30000

@@ -17,6 +17,9 @@
 //     The next `uploadFailures` uploads get `uploadStatus` (+ Retry-After
 //     when `retryAfter` is set) and { error: uploadError }, then uploads
 //     succeed. pipeline: "ok" (default) or "infected" (virus found).
+//     holdPipeline: true keeps each upload "pending" until
+//   POST /__e2e/release-pipeline     starts the held pipelines (lets a slow
+//                                    simulator observe every status).
 //
 // Env: PORT (4010), E2E_SIMPLE_CODE (E2E123), E2E_QR_TOKEN,
 //      E2E_STEP_MS (delay between pipeline statuses, 2000),
@@ -46,7 +49,9 @@ const DEFAULT_SCENARIO = {
   uploadError: '',
   retryAfter: null,
   pipeline: 'ok',
+  holdPipeline: false,
 }
+let heldPipelines = []
 let scenario = { ...DEFAULT_SCENARIO }
 
 const SESSION_EXPIRES_AT = new Date(Date.now() + 7 * 86400_000).toISOString()
@@ -197,7 +202,11 @@ const routes = async (req, res) => {
       bytes: body.length,
       at: Date.now(),
     })
-    runPipeline(fileId, filename, scenario.pipeline)
+    if (scenario.holdPipeline) {
+      heldPipelines.push([fileId, filename, scenario.pipeline])
+    } else {
+      runPipeline(fileId, filename, scenario.pipeline)
+    }
     return send(res, 200, { file_id: fileId, filename, status: 'pending' })
   }
 
@@ -206,8 +215,15 @@ const routes = async (req, res) => {
   if (req.method === 'POST' && path === '/__e2e/reset') {
     state = newState()
     scenario = { ...DEFAULT_SCENARIO }
+    heldPipelines = []
     deviceTokens.clear()
     return send(res, 204, '')
+  }
+  if (req.method === 'POST' && path === '/__e2e/release-pipeline') {
+    const released = heldPipelines.length
+    heldPipelines.forEach((args) => runPipeline(...args))
+    heldPipelines = []
+    return send(res, 200, { released })
   }
   if (req.method === 'POST' && path === '/__e2e/scenario') {
     scenario = {

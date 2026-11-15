@@ -18,6 +18,10 @@ env:
     env:
       FILE: reunion-virus.m4a
 - extendedWaitUntil:
+    visible: '.*(Pending|En attente).*'
+    timeout: 60000
+- runScript: scripts/release-pipeline.js
+- extendedWaitUntil:
     visible: '.*Fichier infecté \(EICAR-Test-File\).*'
     timeout: 30000
 - assertVisible:
