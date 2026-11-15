@@ -21,6 +21,9 @@ copying the diagrams into every document.
 
 ## Sequences
 
+- [Mobile device enrollment](diagrams/mobile-device-enrollment-sequence.mmd)
+  — proposal (RFC, [mobile-device-enrollment.md](mobile-device-enrollment.md)):
+  QR code issued from an SSO session, revocable credential per device.
 - [Audio worker lifecycle](diagrams/audio-worker-lifecycle.mmd) — continuous
   polling, per-attempt deadlines, the 15-minute claim cutoff, the independent
   20-minute watchdog, health probes, and container restarts.
