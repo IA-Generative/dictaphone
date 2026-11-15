@@ -1,0 +1,103 @@
+name: MIrAI mobile iOS build
+
+# Fork-only workflow (kept apart from upstream's dictaphone-mobile.yml to
+# avoid merge conflicts). Compiles the iOS app for the simulator, without
+# code signing, so native breakages (pods, React Native upgrades, native
+# modules) are caught on every PR instead of on a developer's Mac.
+
+on:
+  push:
+    branches:
+      - mirai-audio
+  pull_request:
+    branches:
+      - "*"
+    paths:
+      - "src/mobile/**"
+      - ".github/workflows/mirai-mobile-ios.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-simulator:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: src/mobile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: yarn
+          cache-dependency-path: src/mobile/yarn.lock
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          working-directory: src/mobile
+
+      - name: Cache CocoaPods
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/mobile/ios/Pods
+          key: pods-${{ runner.os }}-${{ hashFiles('src/mobile/ios/Podfile.lock', 'src/mobile/yarn.lock') }}
+
+      - name: Install pods
+        working-directory: src/mobile/ios
+        # --deployment fails if Podfile.lock is out of date instead of
+        # silently rewriting it.
+        run: bundle exec pod install --deployment
+
+      - name: Build for simulator (no signing)
+        working-directory: src/mobile/ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace AssistantTranscripts.xcworkspace \
+            -scheme AssistantTranscripts \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tee xcodebuild.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" xcodebuild.log
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mirai-ios-simulator-app
+          path: src/mobile/ios/build/Build/Products/Release-iphonesimulator/*.app
+          retention-days: 7
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xcodebuild-log
+          path: src/mobile/ios/xcodebuild.log
+          retention-days: 7
